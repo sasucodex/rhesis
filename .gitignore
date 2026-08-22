@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Audio files
+*.mp3
+*.m4a
+*.wav
+*.aac
+
+# Transcripts
+*gemini*.txt
+lezione*.txt
