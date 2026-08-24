@@ -1,1 +1,6 @@
 google-genai
+fastapi
+uvicorn
+python-multipart
+python-docx
+fpdf2
