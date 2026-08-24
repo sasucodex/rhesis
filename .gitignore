@@ -226,3 +226,7 @@ __marimo__/
 # Transcripts
 *gemini*.txt
 lezione*.txt
+
+# Google Auth files
+credentials.json
+token.pickle
