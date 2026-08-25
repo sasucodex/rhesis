@@ -230,3 +230,4 @@ lezione*.txt
 # Google Auth files
 credentials.json
 token.pickle
+test_audio_formats/

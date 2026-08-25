@@ -7,49 +7,61 @@ import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
 
-function getAbsoluteDate(dateString) {
+function getAbsoluteLong(dateString) {
   if (!dateString) return '';
   const d = new Date(dateString + 'Z');
-  const day = String(d.getDate()).padStart(2, '0');
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const year = d.getFullYear();
-  const hour = String(d.getHours()).padStart(2, '0');
-  const minute = String(d.getMinutes()).padStart(2, '0');
-  return `${day}/${month}/${year} alle ${hour}:${minute}`;
+  const timeStr = d.toLocaleTimeString('it-IT', { hour: '2-digit', minute:'2-digit' });
+  return `${d.toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' })}, ${timeStr}`;
 }
 
-function getRelativeShort(dateString) {
+function getRelativeSidebar(dateString) {
   if (!dateString) return '';
   const d = new Date(dateString + 'Z');
   const now = new Date();
+  
+  const dDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const nowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diffDays = Math.floor((nowDate - dDate) / (1000 * 60 * 60 * 24));
+  
   const diffSec = Math.floor((now - d) / 1000);
   const diffMin = Math.floor(diffSec / 60);
   const diffHour = Math.floor(diffMin / 60);
-  const diffDay = Math.floor(diffHour / 24);
-  const diffMonth = Math.floor(diffDay / 30);
-  const diffYear = Math.floor(diffDay / 365);
 
-  if (diffSec < 60) return "adesso";
-  if (diffMin < 60) return `${diffMin} min fa`;
-  if (diffHour < 24) return `${diffHour}h fa`;
-  if (diffDay < 30) return `${diffDay} ${diffDay === 1 ? 'giorno' : 'giorni'} fa`;
-  if (diffMonth < 12) return `${diffMonth} ${diffMonth === 1 ? 'mese' : 'mesi'} fa`;
-  return `${diffYear} ${diffYear === 1 ? 'anno' : 'anni'} fa`;
+  if (diffDays === 0) {
+    if (diffSec < 60) return "adesso";
+    if (diffMin < 60) return `${diffMin}m fa`;
+    return `${diffHour}h fa`;
+  }
+  if (diffDays === 1) return "ieri";
+  if (diffDays >= 2 && diffDays <= 6) return `${diffDays}g fa`;
+  
+  return d.toLocaleDateString('it-IT', { day: 'numeric', month: 'short' }).replace(/\./g, '');
 }
 
 function getRelativeMain(dateString) {
   if (!dateString) return '';
   const d = new Date(dateString + 'Z');
   const now = new Date();
-  const diffDay = Math.floor((now - d) / (1000 * 60 * 60 * 24));
   
-  if (diffDay === 0) {
-    return getRelativeShort(dateString);
-  } else if (diffDay === 1) {
-    return "ieri";
-  } else {
-    return getAbsoluteDate(dateString);
+  const dDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const nowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diffDays = Math.floor((nowDate - dDate) / (1000 * 60 * 60 * 24));
+  
+  const diffSec = Math.floor((now - d) / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  
+  const timeStr = d.toLocaleTimeString('it-IT', { hour: '2-digit', minute:'2-digit' });
+
+  if (diffDays === 0) {
+    if (diffSec < 60) return "adesso";
+    if (diffMin < 60) return diffMin === 1 ? "un minuto fa" : `${diffMin} minuti fa`;
+    return diffHour === 1 ? "un'ora fa" : `${diffHour} ore fa`;
   }
+  if (diffDays === 1) return `ieri alle ${timeStr}`;
+  if (diffDays >= 2 && diffDays <= 6) return `${diffDays} giorni fa alle ${timeStr}`;
+  
+  return getAbsoluteLong(dateString);
 }
 
 const RichTextEditor = ({ content, onSave, onCancel }) => {
@@ -59,7 +71,7 @@ const RichTextEditor = ({ content, onSave, onCancel }) => {
     extensions: [StarterKit, Underline],
     content: content,
     onTransaction: () => {
-      setRevision(r => r + 1) // Forza l'aggiornamento della UI quando si scrive/seleziona
+      setRevision(r => r + 1) 
     },
     editorProps: {
       attributes: {
@@ -70,7 +82,6 @@ const RichTextEditor = ({ content, onSave, onCancel }) => {
 
   if (!editor) return null
 
-  // Stili chiarissimi per i bottoni
   const btnBase = "p-2 rounded transition-all flex items-center justify-center"
   const btnActive = "bg-indigo-100 dark:bg-indigo-500/30 text-indigo-700 dark:text-indigo-200 ring-2 ring-indigo-500/50 shadow-inner"
   const btnInactive = "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-800"
@@ -136,7 +147,6 @@ const RichTextEditor = ({ content, onSave, onCancel }) => {
   )
 }
 
-
 export default function App() {
   const [view, setView] = useState('loading') 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
@@ -157,6 +167,10 @@ export default function App() {
   const [isCopied, setIsCopied] = useState(false)
   const [itemToDelete, setItemToDelete] = useState(null)
   const [errorMsg, setErrorMsg] = useState('')
+  const [enableChapters, setEnableChapters] = useState(() => localStorage.getItem('rhesis_chapters') !== 'false')
+  const [enableTimestamps, setEnableTimestamps] = useState(() => localStorage.getItem('rhesis_timestamps') !== 'false')
+  const [tempEnableChapters, setTempEnableChapters] = useState(() => localStorage.getItem('rhesis_chapters') !== 'false')
+  const [tempEnableTimestamps, setTempEnableTimestamps] = useState(() => localStorage.getItem('rhesis_timestamps') !== 'false')
 
   const fileInputRef = useRef(null)
 
@@ -226,6 +240,10 @@ export default function App() {
       setIsSettingsOpen(false)
       setApiKeyInput('')
       setOriginalTheme(isDarkMode)
+      setEnableChapters(tempEnableChapters)
+      setEnableTimestamps(tempEnableTimestamps)
+      localStorage.setItem('rhesis_chapters', tempEnableChapters)
+      localStorage.setItem('rhesis_timestamps', tempEnableTimestamps)
       fetchHistory()
     } catch (e) {
       alert("Errore nel salvataggio della chiave.")
@@ -235,11 +253,13 @@ export default function App() {
   const openSettings = () => {
     setOriginalTheme(isDarkMode)
     setApiKeyInput('')
+    setTempEnableChapters(enableChapters)
+    setTempEnableTimestamps(enableTimestamps)
     setIsSettingsOpen(true)
   }
 
   const handleSettingsCloseAttempt = () => {
-    const hasChanges = apiKeyInput.trim() !== '' || isDarkMode !== originalTheme;
+    const hasChanges = apiKeyInput.trim() !== '' || isDarkMode !== originalTheme || tempEnableChapters !== enableChapters || tempEnableTimestamps !== enableTimestamps;
     if (hasChanges) {
       setShowUnsavedWarning(true);
     } else {
@@ -250,6 +270,8 @@ export default function App() {
   const discardChanges = () => {
     setIsDarkMode(originalTheme)
     setApiKeyInput('')
+    setTempEnableChapters(enableChapters)
+    setTempEnableTimestamps(enableTimestamps)
     setShowUnsavedWarning(false)
     setIsSettingsOpen(false)
   }
@@ -259,6 +281,10 @@ export default function App() {
       await handleSetupSubmit();
     } else {
       setOriginalTheme(isDarkMode)
+      setEnableChapters(tempEnableChapters)
+      setEnableTimestamps(tempEnableTimestamps)
+      localStorage.setItem('rhesis_chapters', tempEnableChapters)
+      localStorage.setItem('rhesis_timestamps', tempEnableTimestamps)
       setIsSettingsOpen(false)
     }
   }
@@ -320,6 +346,8 @@ export default function App() {
 
     const formData = new FormData()
     formData.append('file', file)
+    formData.append('enable_chapters', enableChapters)
+    formData.append('enable_timestamps', enableTimestamps)
 
     try {
       const response = await fetch('http://127.0.0.1:8000/transcribe/', {
@@ -386,10 +414,6 @@ export default function App() {
       setCurrentRecordId(item.id)
       setTranscript(item.transcript)
       setStatus('success')
-    } else if (item.status === 'error') {
-      setCurrentRecordId(item.id)
-      setErrorMsg(item.transcript || 'Errore sconosciuto')
-      setStatus('error')
     }
   }
 
@@ -403,7 +427,7 @@ export default function App() {
   }
 
   const copyToClipboard = () => {
-    // Convertiamo brutalmente HTML in testo per la clipboard (o passiamo il testo puro se preferito, ma stiamo visualizzando HTML)
+    
     const tempDiv = document.createElement("div");
     tempDiv.innerHTML = transcript;
     navigator.clipboard.writeText(tempDiv.innerText);
@@ -417,7 +441,7 @@ export default function App() {
       const currentItem = historyList.find(item => item.id === currentRecordId);
       const originalName = currentItem ? currentItem.filename.replace(/^\d+_/, '') : 'Trascrizione';
       const rawName = originalName.replace(/\.[^/.]+$/, "");
-      const absDate = currentItem ? getAbsoluteDate(currentItem.created_at) : '';
+      const absDate = currentItem ? getAbsoluteLong(currentItem.created_at) : '';
       const titleForDoc = absDate ? `${rawName} - ${absDate}` : rawName;
       const fileName = `${titleForDoc}.${format === 'word' ? 'docx' : 'pdf'}`;
 
@@ -485,10 +509,8 @@ export default function App() {
   return (
     <div className="flex h-screen bg-zinc-50 dark:bg-[#09090b] text-zinc-900 dark:text-zinc-100 transition-colors overflow-hidden relative">
       
-      {/* Sidebar Stile Gemini */}
       <div className={`${isSidebarOpen ? 'w-72 border-r' : 'w-0'} flex-shrink-0 bg-white dark:bg-[#131314] border-zinc-200 dark:border-zinc-800 transition-all duration-300 ease-in-out flex flex-col overflow-hidden`}>
         
-        {/* Brand */}
         <div className="p-4 flex items-center gap-3">
           <button onClick={() => setIsSidebarOpen(false)} className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors text-zinc-600 dark:text-zinc-400 shrink-0">
             <Menu className="w-5 h-5" />
@@ -499,7 +521,6 @@ export default function App() {
           </h1>
         </div>
 
-        {/* Action Button: Nuova Trascrizione */}
         <div className="px-4 mt-2 mb-6">
           <button 
             onClick={startNewTranscription}
@@ -510,7 +531,6 @@ export default function App() {
           </button>
         </div>
 
-        {/* History List */}
         <div className="flex-1 overflow-y-auto px-3 custom-scrollbar min-w-[288px]">
           <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-3 px-3 uppercase tracking-wider">Recenti</p>
           
@@ -519,15 +539,9 @@ export default function App() {
               <p className="text-sm text-zinc-400 px-3 mt-2">Nessuna trascrizione.</p>
             )}
             {historyList.map((item) => {
-              const isError = item.status === 'error';
               const isSelected = currentRecordId === item.id;
               
-              let bgClass = "hover:bg-zinc-100 dark:hover:bg-zinc-800/60";
-              if (isError) {
-                bgClass = isSelected ? "bg-red-50 dark:bg-red-900/30" : "hover:bg-red-50 dark:hover:bg-red-900/30";
-              } else if (isSelected) {
-                bgClass = "bg-indigo-50 dark:bg-indigo-500/10";
-              }
+              let bgClass = isSelected ? "bg-indigo-50 dark:bg-indigo-500/10" : "hover:bg-zinc-100 dark:hover:bg-zinc-800/60";
 
               return (
                 <div 
@@ -543,18 +557,10 @@ export default function App() {
                   </div>
                   <div className="flex items-center shrink-0 ml-2">
                     <span className="text-xs text-zinc-400 font-medium whitespace-nowrap group-hover:hidden">
-                      {getRelativeShort(item.created_at)}
+                      {getRelativeSidebar(item.created_at)}
                     </span>
                     <div className="hidden group-hover:flex items-center gap-1">
-                      {isError && (
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); handleRetry(item.id); }}
-                          title="Riprova"
-                          className="p-1 bg-white dark:bg-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-600 rounded transition-all shadow-sm border border-zinc-200 dark:border-zinc-600"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5 text-red-500 shrink-0" />
-                        </button>
-                      )}
+
                       <button 
                         onClick={(e) => { e.stopPropagation(); setItemToDelete(item); }}
                         title="Elimina"
@@ -570,7 +576,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Settings Button */}
         <div className="p-4 mt-auto min-w-[288px]">
           <button 
             onClick={openSettings}
@@ -582,10 +587,8 @@ export default function App() {
         </div>
       </div>
 
-      {/* Main Content Area */}
       <div className="flex-1 flex flex-col h-full overflow-y-auto custom-scrollbar bg-zinc-50 dark:bg-[#09090b] relative">
         
-        {/* Floating Hamburger */}
         {!isSidebarOpen && (
           <div className="absolute top-4 left-4 z-10 flex items-center gap-3 animate-in fade-in duration-300">
             <button 
@@ -601,14 +604,13 @@ export default function App() {
           </div>
         )}
 
-        {/* Settings Modal Backdrop */}
         {isSettingsOpen && (
           <div 
             className="fixed inset-0 bg-black/40 dark:bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
             onClick={(e) => { if (e.target === e.currentTarget && !showUnsavedWarning) handleSettingsCloseAttempt(); }}
           >
             <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-8 rounded-3xl max-w-sm w-full shadow-2xl relative">
-              {/* Unsaved Warning Overlay */}
+              
               {showUnsavedWarning && (
                 <div className="absolute inset-0 bg-white/90 dark:bg-zinc-900/95 backdrop-blur-md z-20 rounded-3xl p-8 flex flex-col justify-center items-center text-center animate-in zoom-in-95 duration-200">
                   <AlertCircle className="w-12 h-12 text-amber-500 mb-4" />
@@ -649,7 +651,31 @@ export default function App() {
                     className="w-full bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg px-4 py-2.5 text-zinc-900 dark:text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
-                <div className="flex gap-3 pt-2">
+                
+                <div className="pt-4 border-t border-zinc-200 dark:border-zinc-800 mt-4 space-y-4">
+                  <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-200 mb-2">Opzioni Trascrizione</h4>
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+                    <span className="font-medium text-sm text-zinc-700 dark:text-zinc-200">Genera capitoli per argomento</span>
+                    <button 
+                      onClick={() => setTempEnableChapters(!tempEnableChapters)}
+                      className={`w-12 h-6 rounded-full relative transition-colors shrink-0 ${tempEnableChapters ? 'bg-indigo-500' : 'bg-zinc-300 dark:bg-zinc-700'}`}
+                    >
+                      <div className={`absolute top-1 left-1 bg-white w-4 h-4 rounded-full transition-transform ${tempEnableChapters ? 'translate-x-6' : 'translate-x-0'}`}></div>
+                    </button>
+                  </div>
+                  
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+                    <span className="font-medium text-sm text-zinc-700 dark:text-zinc-200">Includi timestamp (minutaggi)</span>
+                    <button 
+                      onClick={() => setTempEnableTimestamps(!tempEnableTimestamps)}
+                      className={`w-12 h-6 rounded-full relative transition-colors shrink-0 ${tempEnableTimestamps ? 'bg-indigo-500' : 'bg-zinc-300 dark:bg-zinc-700'}`}
+                    >
+                      <div className={`absolute top-1 left-1 bg-white w-4 h-4 rounded-full transition-transform ${tempEnableTimestamps ? 'translate-x-6' : 'translate-x-0'}`}></div>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex gap-3 pt-4 border-t border-zinc-200 dark:border-zinc-800 mt-4">
                   <button onClick={handleSettingsCloseAttempt} className="flex-1 py-2.5 bg-zinc-200 dark:bg-zinc-800 hover:bg-zinc-300 dark:hover:bg-zinc-700 rounded-lg font-medium text-zinc-700 dark:text-zinc-300">Chiudi</button>
                   <button onClick={saveSettings} className="flex-1 py-2.5 bg-indigo-500 hover:bg-indigo-400 rounded-lg font-medium text-white shadow-md shadow-indigo-500/20">Salva</button>
                 </div>
@@ -673,7 +699,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Upload Zone */}
           <div 
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
@@ -778,14 +803,14 @@ export default function App() {
           )}
         </div>
       </div>
-      {/* Modale Eliminazione */}
+      
       {itemToDelete && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setItemToDelete(null)}>
           <div className="bg-white dark:bg-[#18181b] rounded-2xl max-w-md w-full shadow-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800" onClick={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-zinc-900 dark:text-white mb-2">Eliminare la trascrizione?</h3>
               <p className="text-zinc-600 dark:text-zinc-400 text-sm mb-4">
-                Sei sicuro di voler eliminare la trascrizione di <span className="font-semibold text-zinc-800 dark:text-zinc-300">"{itemToDelete.filename.replace(/^\d+_/, '')}"</span>? Questa azione è irreversibile e cancellerà anche il file audio associato.
+                Sei sicuro di voler eliminare la trascrizione di <span className="font-semibold text-zinc-800 dark:text-zinc-300">"{itemToDelete.filename.replace(/^\d+_/, '')}"</span>? Questa azione è irreversibile.
               </p>
               
               <div className="flex gap-3 justify-end mt-6">

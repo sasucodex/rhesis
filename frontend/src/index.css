@@ -18,7 +18,7 @@
   }
 }
 
-/* Scrollbar stile Google/Mac moderna */
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -39,7 +39,7 @@
   background-color: rgba(107, 114, 128, 0.8);
 }
 
-/* Stile scuro per la scrollbar in Dark Mode */
+
 .dark ::-webkit-scrollbar-thumb {
   background-color: rgba(82, 82, 91, 0.5);
 }
