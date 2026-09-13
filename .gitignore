@@ -231,3 +231,7 @@ lezione*.txt
 credentials.json
 token.pickle
 test_audio_formats/
+
+# Others
+AGENTS.md
+docs/

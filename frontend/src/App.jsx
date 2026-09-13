@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { 
-  UploadCloud, FileAudio, Loader2, CheckCircle, Copy, AlertCircle, Settings, Download, Moon, Sun, MessageSquare, Plus, RefreshCw, Menu,
+  UploadCloud, FileAudio, Loader2, CheckCircle, Copy, AlertCircle, Settings, Download, Moon, Sun, MessageSquare, Plus, Menu,
   Pencil, Bold, Italic, Underline as UnderlineIcon, Undo, Redo, Save, X, Trash2
 } from 'lucide-react'
 import { useEditor, EditorContent } from '@tiptap/react'
@@ -367,29 +367,6 @@ export default function App() {
     }
   }
 
-  const handleRetry = async (recordId) => {
-    setStatus('uploading')
-    setErrorMsg('')
-    setTranscript('')
-    setFile(null)
-    setIsEditing(false)
-
-    try {
-      const response = await fetch(`http://127.0.0.1:8000/retry/${recordId}`, {
-        method: 'POST'
-      })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || 'Errore durante la trascrizione')
-      
-      setCurrentRecordId(data.id)
-      setTranscript(data.transcript)
-      setStatus('success')
-      fetchHistory()
-    } catch (err) {
-      setErrorMsg(err.message)
-      setStatus('error')
-    }
-  }
 
   const handleSaveEdit = async (newHtml) => {
     try {
