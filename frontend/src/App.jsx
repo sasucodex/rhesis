@@ -6,6 +6,16 @@ import {
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
+import {
+  getStatus,
+  setupApiKey,
+  deleteApiKey,
+  fetchHistory,
+  transcribeAudio,
+  updateTranscript,
+  deleteTranscript,
+  exportDocument,
+} from './services/api'
 
 function getAbsoluteLong(dateString) {
   if (!dateString) return '';
@@ -188,11 +198,10 @@ export default function App() {
 
   const fetchStatusAndHistory = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/status')
-      const data = await res.json()
+      const data = await getStatus()
       if (data.api_key_configured) {
         setView('main')
-        fetchHistory()
+        loadHistory()
       } else {
         setView('setup')
       }
@@ -202,13 +211,10 @@ export default function App() {
     }
   }
 
-  const fetchHistory = async () => {
+  const loadHistory = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/history')
-      if (res.ok) {
-        const data = await res.json()
-        setHistoryList(data)
-      }
+      const data = await fetchHistory()
+      setHistoryList(data)
     } catch (e) {
       console.error("Errore history:", e)
     }
@@ -216,25 +222,20 @@ export default function App() {
   
   const handleDelete = async (id) => {
     try {
-      await fetch(`http://127.0.0.1:8000/transcript/${id}`, { method: 'DELETE' });
-      setItemToDelete(null);
+      await deleteTranscript(id)
+      setItemToDelete(null)
       if (currentRecordId === id) {
-        resetView();
+        resetView()
       }
-      fetchHistory();
+      loadHistory()
     } catch (error) {
-      console.error("Errore cancellazione:", error);
+      console.error("Errore cancellazione:", error)
     }
   }
 
   const handleSetupSubmit = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/setup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: apiKeyInput })
-      })
-      if (!res.ok) throw new Error("Chiave non valida")
+      await setupApiKey(apiKeyInput)
       
       setView('main')
       setIsSettingsOpen(false)
@@ -244,7 +245,7 @@ export default function App() {
       setEnableTimestamps(tempEnableTimestamps)
       localStorage.setItem('rhesis_chapters', tempEnableChapters)
       localStorage.setItem('rhesis_timestamps', tempEnableTimestamps)
-      fetchHistory()
+      loadHistory()
     } catch (e) {
       alert("Errore nel salvataggio della chiave.")
     }
@@ -291,7 +292,7 @@ export default function App() {
 
   const handleLogout = async () => {
     try {
-      await fetch('http://127.0.0.1:8000/setup', { method: 'DELETE' })
+      await deleteApiKey()
       setView('setup')
       setIsSettingsOpen(false)
       setApiKeyInput('')
@@ -350,17 +351,12 @@ export default function App() {
     formData.append('enable_timestamps', enableTimestamps)
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/transcribe/', {
-        method: 'POST',
-        body: formData,
-      })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || 'Errore durante la trascrizione')
+      const data = await transcribeAudio(formData)
       
       setCurrentRecordId(data.id)
       setTranscript(data.transcript)
       setStatus('success')
-      fetchHistory()
+      loadHistory()
     } catch (err) {
       setErrorMsg(err.message)
       setStatus('error')
@@ -370,16 +366,11 @@ export default function App() {
 
   const handleSaveEdit = async (newHtml) => {
     try {
-      const res = await fetch(`http://127.0.0.1:8000/transcript/${currentRecordId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transcript: newHtml })
-      })
-      if (!res.ok) throw new Error("Errore nel salvataggio")
+      await updateTranscript(currentRecordId, newHtml)
       
       setTranscript(newHtml)
       setIsEditing(false)
-      fetchHistory()
+      loadHistory()
     } catch (e) {
       alert(e.message)
     }
@@ -422,18 +413,11 @@ export default function App() {
       const titleForDoc = absDate ? `${rawName} - ${absDate}` : rawName;
       const fileName = `${titleForDoc}.${format === 'word' ? 'docx' : 'pdf'}`;
 
-      const response = await fetch(`http://127.0.0.1:8000/export/${format}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          text: transcript, 
-          filename: rawName, 
-          date_str: absDate 
-        })
+      const blob = await exportDocument(format, { 
+        text: transcript, 
+        filename: rawName, 
+        date_str: absDate 
       });
-      if (!response.ok) throw new Error("Errore durante l'esportazione");
-      
-      const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
