@@ -52,8 +52,19 @@ export async function transcribeAudio(formData) {
   return data
 }
 
-export async function updateTranscript(recordId, transcript) {
-  const body = typeof transcript === 'string' ? { transcript } : transcript
+export async function updateTranscript(recordId, payload, filename) {
+  let body = {}
+  if (typeof payload === 'string') {
+    body.transcript = payload
+    if (filename !== undefined) {
+      body.filename = filename
+    }
+  } else if (typeof payload === 'object' && payload !== null) {
+    body = { ...payload }
+    if (filename !== undefined) {
+      body.filename = filename
+    }
+  }
   const res = await fetch(`${BASE_URL}/transcript/${recordId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },

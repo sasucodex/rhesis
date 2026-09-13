@@ -2,6 +2,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from typing import Optional
 import os
 import time
 from google import genai
@@ -71,7 +72,8 @@ class ExportRequest(BaseModel):
     filename: str = "Trascrizione"
     date_str: str = ""
 class UpdateTranscriptRequest(BaseModel):
-    transcript: str
+    transcript: Optional[str] = None
+    filename: Optional[str] = None
 @app.get("/")
 def read_root():
     return {"message": "Rhesis Server is running! 🚀"}
@@ -191,8 +193,18 @@ def transcribe(
 def update_transcript(record_id: int, req: UpdateTranscriptRequest):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("UPDATE transcriptions SET transcript = ? WHERE id = ?", (req.transcript, record_id))
-    conn.commit()
+    updates = []
+    params = []
+    if req.transcript is not None:
+        updates.append("transcript = ?")
+        params.append(req.transcript)
+    if req.filename is not None:
+        updates.append("filename = ?")
+        params.append(req.filename)
+    if updates:
+        params.append(record_id)
+        c.execute(f"UPDATE transcriptions SET {', '.join(updates)} WHERE id = ?", tuple(params))
+        conn.commit()
     conn.close()
     return {"message": "Success"}
 @app.delete("/transcript/{record_id}")

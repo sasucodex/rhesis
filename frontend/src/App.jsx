@@ -1,11 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { 
-  UploadCloud, FileAudio, Loader2, CheckCircle, Copy, AlertCircle, Settings, Download, Moon, Sun, MessageSquare, Plus, Menu,
-  Pencil, Bold, Italic, Underline as UnderlineIcon, Undo, Redo, Save, X, Trash2
+  UploadCloud, FileAudio, Loader2, AlertCircle, Settings, Moon, Sun, MessageSquare, Plus, Menu, Trash2
 } from 'lucide-react'
-import { useEditor, EditorContent } from '@tiptap/react'
-import StarterKit from '@tiptap/starter-kit'
-import Underline from '@tiptap/extension-underline'
 import {
   getStatus,
   setupApiKey,
@@ -16,146 +12,10 @@ import {
   deleteTranscript,
   exportDocument,
 } from './services/api'
-
-function getAbsoluteLong(dateString) {
-  if (!dateString) return '';
-  const d = new Date(dateString + 'Z');
-  const timeStr = d.toLocaleTimeString('it-IT', { hour: '2-digit', minute:'2-digit' });
-  return `${d.toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' })}, ${timeStr}`;
-}
-
-function getRelativeSidebar(dateString) {
-  if (!dateString) return '';
-  const d = new Date(dateString + 'Z');
-  const now = new Date();
-  
-  const dDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const nowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const diffDays = Math.floor((nowDate - dDate) / (1000 * 60 * 60 * 24));
-  
-  const diffSec = Math.floor((now - d) / 1000);
-  const diffMin = Math.floor(diffSec / 60);
-  const diffHour = Math.floor(diffMin / 60);
-
-  if (diffDays === 0) {
-    if (diffSec < 60) return "adesso";
-    if (diffMin < 60) return `${diffMin}m fa`;
-    return `${diffHour}h fa`;
-  }
-  if (diffDays === 1) return "ieri";
-  if (diffDays >= 2 && diffDays <= 6) return `${diffDays}g fa`;
-  
-  return d.toLocaleDateString('it-IT', { day: 'numeric', month: 'short' }).replace(/\./g, '');
-}
-
-function getRelativeMain(dateString) {
-  if (!dateString) return '';
-  const d = new Date(dateString + 'Z');
-  const now = new Date();
-  
-  const dDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const nowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const diffDays = Math.floor((nowDate - dDate) / (1000 * 60 * 60 * 24));
-  
-  const diffSec = Math.floor((now - d) / 1000);
-  const diffMin = Math.floor(diffSec / 60);
-  const diffHour = Math.floor(diffMin / 60);
-  
-  const timeStr = d.toLocaleTimeString('it-IT', { hour: '2-digit', minute:'2-digit' });
-
-  if (diffDays === 0) {
-    if (diffSec < 60) return "adesso";
-    if (diffMin < 60) return diffMin === 1 ? "un minuto fa" : `${diffMin} minuti fa`;
-    return diffHour === 1 ? "un'ora fa" : `${diffHour} ore fa`;
-  }
-  if (diffDays === 1) return `ieri alle ${timeStr}`;
-  if (diffDays >= 2 && diffDays <= 6) return `${diffDays} giorni fa alle ${timeStr}`;
-  
-  return getAbsoluteLong(dateString);
-}
-
-const RichTextEditor = ({ content, onSave, onCancel }) => {
-  const [revision, setRevision] = useState(0)
-  
-  const editor = useEditor({
-    extensions: [StarterKit, Underline],
-    content: content,
-    onTransaction: () => {
-      setRevision(r => r + 1) 
-    },
-    editorProps: {
-      attributes: {
-        class: 'prose dark:prose-invert prose-zinc max-w-none focus:outline-none min-h-[400px]',
-      },
-    },
-  })
-
-  if (!editor) return null
-
-  const btnBase = "p-2 rounded transition-all flex items-center justify-center"
-  const btnActive = "bg-indigo-100 dark:bg-indigo-500/30 text-indigo-700 dark:text-indigo-200 ring-2 ring-indigo-500/50 shadow-inner"
-  const btnInactive = "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-800"
-  
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-[#18181b] px-4 py-3 sticky top-0 z-10 rounded-t-3xl">
-        <div className="flex items-center gap-1.5">
-          <button 
-            onClick={() => editor.chain().focus().toggleBold().run()} 
-            className={`${btnBase} ${editor.isActive('bold') ? btnActive : btnInactive}`}
-            title="Grassetto"
-          >
-            <Bold className="w-4 h-4" />
-          </button>
-          <button 
-            onClick={() => editor.chain().focus().toggleItalic().run()} 
-            className={`${btnBase} ${editor.isActive('italic') ? btnActive : btnInactive}`}
-            title="Corsivo"
-          >
-            <Italic className="w-4 h-4" />
-          </button>
-          <button 
-            onClick={() => editor.chain().focus().toggleUnderline().run()} 
-            className={`${btnBase} ${editor.isActive('underline') ? btnActive : btnInactive}`}
-            title="Sottolineato"
-          >
-            <UnderlineIcon className="w-4 h-4" />
-          </button>
-          
-          <div className="w-px h-6 bg-zinc-300 dark:bg-zinc-700 mx-2"></div>
-          
-          <button 
-            onClick={() => editor.chain().focus().undo().run()} 
-            disabled={!editor.can().undo()} 
-            className={`p-2 rounded transition-opacity ${!editor.can().undo() ? 'opacity-30 cursor-not-allowed text-zinc-400' : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-800'}`}
-            title="Indietro"
-          >
-            <Undo className="w-4 h-4" />
-          </button>
-          <button 
-            onClick={() => editor.chain().focus().redo().run()} 
-            disabled={!editor.can().redo()} 
-            className={`p-2 rounded transition-opacity ${!editor.can().redo() ? 'opacity-30 cursor-not-allowed text-zinc-400' : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-800'}`}
-            title="Avanti"
-          >
-            <Redo className="w-4 h-4" />
-          </button>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={onCancel} className="px-4 py-2 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-lg flex items-center gap-1 transition-colors">
-            <X className="w-4 h-4" /> Annulla
-          </button>
-          <button onClick={() => onSave(editor.getHTML())} className="px-4 py-2 text-sm font-medium bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg flex items-center gap-1 shadow-sm transition-colors">
-            <Save className="w-4 h-4" /> Salva modifiche
-          </button>
-        </div>
-      </div>
-      <div className="p-8 overflow-y-auto custom-scrollbar flex-1 bg-white dark:bg-[#131314]">
-        <EditorContent editor={editor} />
-      </div>
-    </div>
-  )
-}
+import { getAbsoluteLong, getRelativeSidebar, getRelativeMain } from './utils/dateUtils'
+import ConfirmDeleteModal from './components/modals/ConfirmDeleteModal'
+import RichTextEditor from './components/editor/RichTextEditor'
+import EditorHeader from './components/editor/EditorHeader'
 
 export default function App() {
   const [view, setView] = useState('loading') 
@@ -371,6 +231,20 @@ export default function App() {
       setTranscript(newHtml)
       setIsEditing(false)
       loadHistory()
+    } catch (e) {
+      alert(e.message)
+    }
+  }
+
+  const handleRename = async (newFilename) => {
+    if (!currentRecordId || !newFilename) return
+    try {
+      await updateTranscript(currentRecordId, { filename: newFilename })
+      setHistoryList((prev) =>
+        prev.map((item) =>
+          item.id === currentRecordId ? { ...item, filename: newFilename } : item
+        )
+      )
     } catch (e) {
       alert(e.message)
     }
@@ -715,40 +589,23 @@ export default function App() {
             <div className={`w-full bg-white dark:bg-[#131314] border border-zinc-200 dark:border-zinc-800 rounded-3xl overflow-hidden shadow-2xl animate-in fade-in slide-in-from-bottom-4 duration-500 flex flex-col ${isEditing ? 'h-[600px]' : ''}`}>
               {!isEditing ? (
                 <>
-                  <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-[#131314] flex-wrap gap-4 shrink-0">
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-2 text-emerald-500 dark:text-emerald-400">
-                        <CheckCircle className="w-5 h-5" />
-                        <span className="font-medium">Trascrizione completata</span>
-                      </div>
-                      {historyList.find(item => item.id === currentRecordId) && (
-                        <div className="text-zinc-400 text-sm ml-2 font-normal hidden sm:flex items-center gap-2">
-                          <span className="text-[10px]">●</span>
-                          <span>{getRelativeMain(historyList.find(item => item.id === currentRecordId).created_at)}</span>
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {isCopied ? (
-                        <button className="p-2 px-3 text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium border border-emerald-200 dark:border-emerald-500/30 cursor-default">
-                          <CheckCircle className="w-4 h-4" /> Copiato
-                        </button>
-                      ) : (
-                        <button onClick={copyToClipboard} className="p-2 px-3 text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium border border-zinc-200 dark:border-zinc-700">
-                          <Copy className="w-4 h-4" /> Copia
-                        </button>
-                      )}
-                      <button onClick={() => handleExport('word')} className="p-2 px-3 text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium border border-zinc-200 dark:border-zinc-700">
-                        <Download className="w-4 h-4 text-blue-500 dark:text-blue-400" /> Word
-                      </button>
-                      <button onClick={() => handleExport('pdf')} className="p-2 px-3 text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium border border-zinc-200 dark:border-zinc-700">
-                        <Download className="w-4 h-4 text-red-500 dark:text-red-400" /> PDF
-                      </button>
-                      <button onClick={() => setIsEditing(true)} className="p-2 px-3 text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium border border-zinc-200 dark:border-zinc-700 ml-2">
-                        <Pencil className="w-4 h-4 text-emerald-500 dark:text-emerald-400" /> Modifica
-                      </button>
-                    </div>
-                  </div>
+                  <EditorHeader
+                    filename={
+                      historyList.find((item) => item.id === currentRecordId)?.filename ||
+                      (file ? file.name : 'Trascrizione')
+                    }
+                    dateStr={
+                      historyList.find((item) => item.id === currentRecordId)?.created_at
+                        ? getRelativeMain(historyList.find((item) => item.id === currentRecordId).created_at)
+                        : ''
+                    }
+                    isEditing={isEditing}
+                    isCopied={isCopied}
+                    onRename={handleRename}
+                    onCopy={copyToClipboard}
+                    onExport={handleExport}
+                    onEditToggle={() => setIsEditing(true)}
+                  />
                   <div className="p-8 max-h-[600px] overflow-y-auto custom-scrollbar flex-1">
                     <div className="prose dark:prose-invert prose-zinc max-w-none prose-lg" dangerouslySetInnerHTML={{ __html: transcript }}></div>
                   </div>
@@ -765,33 +622,12 @@ export default function App() {
         </div>
       </div>
       
-      {itemToDelete && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setItemToDelete(null)}>
-          <div className="bg-white dark:bg-[#18181b] rounded-2xl max-w-md w-full shadow-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800" onClick={e => e.stopPropagation()}>
-            <div className="p-6">
-              <h3 className="text-lg font-bold text-zinc-900 dark:text-white mb-2">Eliminare la trascrizione?</h3>
-              <p className="text-zinc-600 dark:text-zinc-400 text-sm mb-4">
-                Sei sicuro di voler eliminare la trascrizione di <span className="font-semibold text-zinc-800 dark:text-zinc-300">"{itemToDelete.filename.replace(/^\d+_/, '')}"</span>? Questa azione è irreversibile.
-              </p>
-              
-              <div className="flex gap-3 justify-end mt-6">
-                <button 
-                  onClick={() => setItemToDelete(null)}
-                  className="px-4 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded-lg transition-colors"
-                >
-                  Annulla
-                </button>
-                <button 
-                  onClick={() => handleDelete(itemToDelete.id)}
-                  className="px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors shadow-sm"
-                >
-                  Elimina definitivamente
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDeleteModal
+        isOpen={Boolean(itemToDelete)}
+        itemToDelete={itemToDelete}
+        onConfirm={handleDelete}
+        onClose={() => setItemToDelete(null)}
+      />
     </div>
   )
 }
