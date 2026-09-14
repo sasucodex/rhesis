@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
 import os
+import re
 import time
 from google import genai
 from google.genai import types
@@ -122,12 +123,40 @@ def delete_api_key():
     if os.path.exists(CONFIG_FILE):
         os.remove(CONFIG_FILE)
     return {"message": "API Key rimossa con successo"}
+import threading
+
+TASKS = {}
+tasks_lock = threading.Lock()
+
+def update_task(task_id: str, status: str, progress: int, message: str, result=None, error=None):
+    with tasks_lock:
+        if task_id not in TASKS:
+            TASKS[task_id] = {
+                "task_id": task_id,
+                "created_at": time.time(),
+            }
+        TASKS[task_id].update({
+            "status": status,
+            "progress": progress,
+            "message": message,
+            "result": result,
+            "error": error,
+            "updated_at": time.time(),
+        })
+
+def cleanup_old_tasks():
+    with tasks_lock:
+        now = time.time()
+        expired = [tid for tid, t in TASKS.items() if now - t.get("created_at", now) > 7200]
+        for tid in expired:
+            del TASKS[tid]
+
 @app.get("/history")
 def get_history():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    c.execute("SELECT id, filename, file_path, status, created_at, transcript, audio_preserved FROM transcriptions ORDER BY id DESC")
+    c.execute("SELECT id, filename, file_path, status, created_at, transcript, audio_preserved FROM transcriptions WHERE status = 'success' ORDER BY id DESC")
     rows = c.fetchall()
     conn.close()
     result = []
@@ -138,18 +167,43 @@ def get_history():
         result.append(item)
     return result
 
-def process_transcription_core(api_key: str, file_path: str, record_id: int, enable_chapters: bool = False, enable_timestamps: bool = False, preserve_audio: bool = False):
+def process_transcription_core(
+    api_key: str,
+    file_path: str,
+    record_id: int,
+    enable_chapters: bool = False,
+    enable_timestamps: bool = False,
+    preserve_audio: bool = False,
+    task_id: Optional[str] = None
+):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    uploaded_file = None
+    client = None
     try:
         client = genai.Client(api_key=api_key)
+        if task_id:
+            update_task(task_id, "upload_google", 35, "Caricamento audio su Google AI Studio in corso...")
         uploaded_file = client.files.upload(file=file_path)
+
+        if task_id:
+            update_task(task_id, "processing_google", 55, "I server Google stanno elaborando il file audio...")
         file_info = client.files.get(name=uploaded_file.name)
+        poll_count = 0
         while file_info.state.name == 'PROCESSING':
             time.sleep(2)
+            poll_count += 1
+            if task_id:
+                prog = min(55 + poll_count * 2, 70)
+                update_task(task_id, "processing_google", prog, "I server Google stanno elaborando il file audio...")
             file_info = client.files.get(name=uploaded_file.name)
+
         if file_info.state.name == 'FAILED':
             raise Exception("Google backend failed processing audio.")
+
+        if task_id:
+            update_task(task_id, "gemini_generating", 75, "Trascrizione in corso con Gemini...")
+
         system_instruction = (
             "Sei un trascrittore professionale e accademico. Il tuo compito è produrre una trascrizione testuale PAROLA PER PAROLA (verbatim) dell'audio fornito. "
             "REGOLA FONDAMENTALE 1: NON riassumere MAI, NON saltare argomenti e NON tagliare il testo. Devi trascrivere ogni singola frase detta, parola per parola. "
@@ -165,42 +219,128 @@ def process_transcription_core(api_key: str, file_path: str, record_id: int, ena
             prompt += " Inserisci i timestamp nel formato [MM:SS] all'inizio di ogni cambio logico di argomento o blocco di discorso."
         else:
             prompt += " ASSOLUTAMENTE NON INSERIRE timestamp o minutaggi nel testo."
-        response = client.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=[uploaded_file, prompt],
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.2
-            )
-        )
-        transcript_html = markdown.markdown(response.text)
-        try:
-            client.files.delete(name=uploaded_file.name)
-        except:
-            pass
+
+        max_retries = 3
+        response = None
+        for attempt in range(max_retries):
+            reconnect_timer = None
+            try:
+                if attempt > 0 and task_id:
+                    update_task(
+                        task_id,
+                        "gemini_generating",
+                        75,
+                        f"Nuovo tentativo ({attempt + 1}/{max_retries}) in corso con Gemini..."
+                    )
+                    reconnect_timer = threading.Timer(
+                        2.0,
+                        update_task,
+                        args=(task_id, "gemini_generating", 75, "Trascrizione in corso con Gemini...")
+                    )
+                    reconnect_timer.daemon = True
+                    reconnect_timer.start()
+
+                response = client.models.generate_content(
+                    model="gemini-3-flash-preview",
+                    contents=[uploaded_file, prompt],
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=0.2
+                    )
+                )
+                break
+            except Exception as gen_err:
+                err_str = str(gen_err)
+                if ('503' in err_str or 'high demand' in err_str.lower() or 'unavailable' in err_str.lower()) and attempt < max_retries - 1:
+                    backoff = (2 ** attempt) * 2
+                    for rem in range(backoff, 0, -1):
+                        if task_id:
+                            update_task(
+                                task_id,
+                                "gemini_generating",
+                                75,
+                                f"Server Google occupati, nuovo tentativo tra {rem}s..."
+                            )
+                        time.sleep(1)
+                else:
+                    raise gen_err
+            finally:
+                if reconnect_timer:
+                    reconnect_timer.cancel()
+
+        raw_text = response.text
+        cleaned_text = re.sub(r'(?m)^(\s*\[\d{1,2}:\d{2}(?::\d{2})?\])\s*##\s*', r'## \1 ', raw_text)
+        cleaned_text = re.sub(r'(\[\d{1,2}:\d{2}(?::\d{2})?\])\s*##\s*', r'\1 ', cleaned_text)
+        transcript_html = markdown.markdown(cleaned_text)
+        if uploaded_file:
+            try:
+                client.files.delete(name=uploaded_file.name)
+            except Exception:
+                pass
+
         c.execute("UPDATE transcriptions SET transcript = ?, status = 'success', created_at = CURRENT_TIMESTAMP WHERE id = ?", (transcript_html, record_id))
         conn.commit()
+
+        if not preserve_audio and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+
+        if task_id:
+            update_task(
+                task_id,
+                "completed",
+                100,
+                "Trascrizione completata con successo!",
+                result={
+                    "id": record_id,
+                    "transcript": transcript_html,
+                    "status": "success",
+                    "audio_preserved": preserve_audio
+                }
+            )
         return transcript_html
     except Exception as e:
         error_msg = str(e)
         if '503' in error_msg or 'high demand' in error_msg.lower():
-            error_msg = "Errore. L'audio potrebbe essere troppo breve, generato artificialmente, oppure i server sono momentaneamente saturi. Riprovare."
+            error_msg = "I server di Google sono momentaneamente saturi (High Demand). Riprova tra qualche minuto."
+
+        if uploaded_file and client:
+            try:
+                client.files.delete(name=uploaded_file.name)
+            except Exception:
+                pass
+
         c.execute("DELETE FROM transcriptions WHERE id = ?", (record_id,))
         conn.commit()
+
         if os.path.exists(file_path):
             try:
                 os.remove(file_path)
-            except:
+            except Exception:
                 pass
+
+        if task_id:
+            update_task(task_id, "error", 0, error_msg, error=error_msg)
+
         raise Exception(error_msg)
     finally:
-        if not preserve_audio:
-            try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-            except:
-                pass
         conn.close()
+
+def transcription_worker(task_id: str, api_key: str, file_path: str, record_id: int, enable_chapters: bool, enable_timestamps: bool, preserve_audio: bool):
+    try:
+        process_transcription_core(
+            api_key=api_key,
+            file_path=file_path,
+            record_id=record_id,
+            enable_chapters=enable_chapters,
+            enable_timestamps=enable_timestamps,
+            preserve_audio=preserve_audio,
+            task_id=task_id
+        )
+    except Exception:
+        pass
 
 @app.post("/transcribe/")
 def transcribe(
@@ -209,6 +349,7 @@ def transcribe(
     enable_timestamps: bool = Form(False),
     preserve_audio: bool = Form(False)
 ):
+    cleanup_old_tasks()
     api_key = get_saved_api_key()
     if not api_key:
         raise HTTPException(status_code=401, detail="API Key not configured.")
@@ -222,15 +363,46 @@ def transcribe(
         shutil.copyfileobj(file.file, buffer)
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT INTO transcriptions (filename, file_path, status, audio_preserved) VALUES (?, ?, 'uploading', ?)", (file.filename, file_path, 1 if preserve_audio else 0))
+    c.execute("INSERT INTO transcriptions (filename, file_path, status, audio_preserved) VALUES (?, ?, 'processing', ?)", (file.filename, file_path, 1 if preserve_audio else 0))
     record_id = c.lastrowid
     conn.commit()
     conn.close()
-    try:
-        transcript = process_transcription_core(api_key, file_path, record_id, enable_chapters, enable_timestamps, preserve_audio)
-        return {"id": record_id, "transcript": transcript, "status": "success", "audio_preserved": preserve_audio}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+    task_id = uuid.uuid4().hex
+    with tasks_lock:
+        TASKS[task_id] = {
+            "task_id": task_id,
+            "record_id": record_id,
+            "status": "upload_local",
+            "progress": 15,
+            "message": "File audio salvato in locale. Inizializzazione pipeline...",
+            "result": None,
+            "error": None,
+            "created_at": time.time(),
+            "updated_at": time.time()
+        }
+
+    worker = threading.Thread(
+        target=transcription_worker,
+        args=(task_id, api_key, file_path, record_id, enable_chapters, enable_timestamps, preserve_audio),
+        daemon=True
+    )
+    worker.start()
+
+    return {
+        "task_id": task_id,
+        "id": record_id,
+        "record_id": record_id,
+        "status": "upload_local"
+    }
+
+@app.get("/task/{task_id}")
+def get_task_status(task_id: str):
+    with tasks_lock:
+        task = TASKS.get(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task non trovato")
+        return dict(task)
 
 @app.api_route("/audio/{record_id}", methods=["GET", "HEAD"])
 def stream_audio(record_id: int):

@@ -1,5 +1,6 @@
 import { useRef } from 'react'
-import { UploadCloud, Loader2, AlertCircle } from 'lucide-react'
+import { UploadCloud, AlertCircle } from 'lucide-react'
+import ProcessingStatus from './ProcessingStatus'
 
 export default function UploadZone({
   file,
@@ -11,8 +12,17 @@ export default function UploadZone({
   onDragOver,
   onDragLeave,
   onDrop,
+  task,
 }) {
   const fileInputRef = useRef(null)
+
+  if (status === 'uploading' || status === 'processing') {
+    return (
+      <div className="w-full space-y-8 flex flex-col items-center animate-in fade-in duration-300">
+        <ProcessingStatus task={task} file={file} />
+      </div>
+    )
+  }
 
   return (
     <div className="w-full space-y-8 flex flex-col items-center">
@@ -34,7 +44,6 @@ export default function UploadZone({
             : 'border-zinc-300 dark:border-zinc-800 bg-white dark:bg-[#131314] hover:border-zinc-400 dark:hover:border-zinc-700 shadow-sm'
         } ${status === 'uploading' || status === 'transcribing' ? 'opacity-50 pointer-events-none' : ''}`}
       >
-        {status === 'idle' || status === 'error' ? (
           <>
             <div className="p-4 bg-zinc-100 dark:bg-zinc-800/50 rounded-full shadow-inner mb-2">
               <UploadCloud className="w-10 h-10 text-zinc-400" />
@@ -64,15 +73,6 @@ export default function UploadZone({
               Sfoglia file
             </button>
           </>
-        ) : (
-          <div className="flex flex-col items-center justify-center space-y-4 py-8">
-            <Loader2 className="w-10 h-10 text-zinc-900 dark:text-zinc-100 animate-spin" />
-            <h3 className="text-xl font-medium text-zinc-700 dark:text-zinc-200">
-              {status === 'uploading' ? 'Caricamento in corso...' : "Analisi dell'audio in corso sul cloud..."}
-            </h3>
-            <p className="text-zinc-500 text-sm">Può richiedere qualche minuto per file lunghi.</p>
-          </div>
-        )}
       </div>
 
       {file && (status === 'idle' || status === 'error') && (

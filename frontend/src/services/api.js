@@ -52,6 +52,15 @@ export async function transcribeAudio(formData) {
   return data
 }
 
+export async function getTaskStatus(taskId) {
+  const res = await fetch(`${BASE_URL}/task/${taskId}`)
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(data.detail || 'Impossibile recuperare lo stato del task')
+  }
+  return data
+}
+
 export async function updateTranscript(recordId, payload, filename) {
   let body = {}
   if (typeof payload === 'string') {

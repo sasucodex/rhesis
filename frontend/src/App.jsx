@@ -6,6 +6,7 @@ import {
   deleteApiKey,
   fetchHistory,
   transcribeAudio,
+  getTaskStatus,
   updateTranscript,
   deleteTranscript,
   exportDocument,
@@ -47,6 +48,8 @@ export default function App() {
   const [status, setStatus] = useState('idle')
   const [transcript, setTranscript] = useState('')
   const [currentRecordId, setCurrentRecordId] = useState(null)
+  const [currentTaskId, setCurrentTaskId] = useState(null)
+  const [currentTask, setCurrentTask] = useState(null)
   const [seekRequest, setSeekRequest] = useState(null)
   const [isEditing, setIsEditing] = useState(false)
   const [isCopied, setIsCopied] = useState(false)
@@ -117,6 +120,8 @@ export default function App() {
     setIsEditing(false)
     setCurrentRecordId(null)
     setSeekRequest(null)
+    setCurrentTaskId(null)
+    setCurrentTask(null)
   }
 
   const handleDelete = async (id) => {
@@ -270,12 +275,65 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    if (!currentTaskId) return
+    let isMounted = true
+    let completeTimer = null
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const taskData = await getTaskStatus(currentTaskId)
+        if (!isMounted) return
+        setCurrentTask(taskData)
+
+        if (taskData.status === 'completed') {
+          clearInterval(pollInterval)
+          completeTimer = setTimeout(() => {
+            if (!isMounted) return
+            if (taskData.result) {
+              setCurrentRecordId(taskData.result.id)
+              setTranscript(taskData.result.transcript)
+            }
+            setStatus('success')
+            setCurrentTaskId(null)
+            setCurrentTask(null)
+            loadHistory()
+          }, 1200)
+        } else if (taskData.status === 'error') {
+          clearInterval(pollInterval)
+          const errMsg = taskData.error || taskData.message || 'Errore durante la trascrizione'
+          setErrorMsg(errMsg)
+          setLastError(errMsg)
+          setStatus('error')
+          setCurrentTaskId(null)
+          setCurrentTask(null)
+        }
+      } catch (err) {
+        if (!isMounted) return
+        console.error('Errore polling task:', err)
+      }
+    }, 1500)
+
+    return () => {
+      isMounted = false
+      clearInterval(pollInterval)
+      if (completeTimer) {
+        clearTimeout(completeTimer)
+      }
+    }
+  }, [currentTaskId])
+
   const handleTranscribe = async () => {
     if (!file) return
-    setStatus('uploading')
+    setStatus('processing')
     setErrorMsg('')
     setTranscript('')
     setIsEditing(false)
+    setCurrentTask({
+      status: 'upload_local',
+      progress: 15,
+      message: 'Salvataggio audio locale in corso...',
+    })
 
     const formData = new FormData()
     formData.append('file', file)
@@ -285,14 +343,17 @@ export default function App() {
 
     try {
       const data = await transcribeAudio(formData)
-      setCurrentRecordId(data.id)
-      setTranscript(data.transcript)
-      setStatus('success')
-      loadHistory()
+      setCurrentTaskId(data.task_id)
+      setCurrentTask((prev) => ({
+        ...prev,
+        ...data,
+      }))
     } catch (err) {
       setErrorMsg(err.message)
       setLastError(err.message)
       setStatus('error')
+      setCurrentTaskId(null)
+      setCurrentTask(null)
     }
   }
 
@@ -326,6 +387,8 @@ export default function App() {
   const viewHistoryItem = (item) => {
     setIsEditing(false)
     setSeekRequest(null)
+    setCurrentTaskId(null)
+    setCurrentTask(null)
     if (item.status === 'success' && item.transcript) {
       setCurrentRecordId(item.id)
       setTranscript(item.transcript)
@@ -370,10 +433,12 @@ export default function App() {
 
   const formattedTranscript = useMemo(() => {
     if (!transcript) return ''
-    return transcript.replace(
-      /\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g,
-      '<button type="button" data-timestamp="$1" class="timestamp-badge inline-flex items-center gap-1 font-mono text-xs px-2 py-0.5 my-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700 font-medium select-none align-middle transition-colors cursor-pointer" title="Salta al timestamp $1">▶ $1</button>'
-    )
+    return transcript
+      .replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*##\s*/g, '[$1] ')
+      .replace(
+        /\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g,
+        '<button type="button" data-timestamp="$1" class="timestamp-badge inline-flex items-center gap-1 font-mono text-xs px-2 py-0.5 my-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700 font-medium select-none align-middle transition-colors cursor-pointer" title="Salta al timestamp $1">▶ $1</button>'
+      )
   }, [transcript])
 
   const handleTimestampClick = (e) => {
@@ -521,6 +586,7 @@ export default function App() {
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
+              task={currentTask}
             />
           )}
         </div>
