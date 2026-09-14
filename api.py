@@ -35,6 +35,77 @@ UPLOAD_DIR = os.path.join(CONFIG_DIR, "uploads")
 os.makedirs(CONFIG_DIR, exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+def clean_transcription_markdown(raw_text: str) -> str:
+    if not raw_text:
+        return ""
+    text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r'(?m)^[ \t]*##[ \t]*\n+(?:[ \t]*\n)*[ \t]*(\[\d{1,2}:\d{2}(?::\d{2})?\]\s*[^\n]+)', r'## \1', text)
+    text = re.sub(r'(?m)^[ \t]*##[ \t]*\n+(?:[ \t]*\n)*[ \t]*([A-Za-zÀ-ÿ0-9][^\n]+)', r'## \1', text)
+    text = re.sub(r'(?m)^[ \t]*(\[\d{1,2}:\d{2}(?::\d{2})?\])\s*##\s*', r'## \1 ', text)
+    text = re.sub(r'(?m)^[ \t]*(\[\d{1,2}:\d{2}(?::\d{2})?\])\s*\n+(?:[ \t]*\n)*##\s*', r'## \1 ', text)
+    text = re.sub(r'(?m)^[ \t]*##\s*$', '', text)
+
+    def clean_heading_and_following(match):
+        ts = match.group(1)
+        title = match.group(2).strip()
+        sep = match.group(3)
+        following = match.group(4)
+        if re.match(r'\[\d{1,2}:\d{2}(?::\d{2})?\]', following.strip()):
+            return f"## {title}{sep}{following}"
+        return f"## {title}{sep}{ts} {following.lstrip()}"
+
+    text = re.sub(
+        r'(?m)^[ \t]*##\s*(\[\d{1,2}:\d{2}(?::\d{2})?\])\s*([^\n]+)(\n+(?:[ \t]*\n)*)([^\n]+)',
+        clean_heading_and_following,
+        text
+    )
+    text = re.sub(r'(?m)^[ \t]*##\s*\[\d{1,2}:\d{2}(?::\d{2})?\]\s*([^\n]+)', r'## \1', text)
+    return text
+
+def normalize_transcript_html(html: str) -> str:
+    if not html:
+        return ""
+    html = re.sub(r'<p>\s*(\[\d{1,2}:\d{2}(?::\d{2})?\])\s*##\s*(.*?)</p>', r'<h2>\2</h2>', html)
+    html = re.sub(r'<p>\s*##\s*(\[\d{1,2}:\d{2}(?::\d{2})?\]\s*.*?)</p>', r'<h2>\1</h2>', html)
+    html = re.sub(r'<p>\s*##\s*(.*?)</p>', r'<h2>\1</h2>', html)
+    html = re.sub(r'<h2>\s*</h2>\s*<p>(\s*\[\d{1,2}:\d{2}(?::\d{2})?\].*?)</p>', r'<h2>\1</h2>', html)
+    html = re.sub(r'<h2>\s*</h2>\s*', '', html)
+
+    def clean_h2_and_p(match):
+        h2_full = match.group(1)
+        h2_inner = match.group(2)
+        sep = match.group(3)
+        p_open = match.group(4)
+        p_inner = match.group(5)
+
+        ts_match = re.search(r'\[\d{1,2}:\d{2}(?::\d{2})?\]', h2_inner)
+        if not ts_match:
+            return match.group(0)
+
+        ts = ts_match.group(0)
+        clean_h2_inner = re.sub(r'\[\d{1,2}:\d{2}(?::\d{2})?\]\s*', '', h2_inner).strip()
+        clean_h2 = f"<h2>{clean_h2_inner}</h2>"
+
+        if re.match(r'^\s*\[\d{1,2}:\d{2}(?::\d{2})?\]', p_inner):
+            return f"{clean_h2}{sep}{p_open}{p_inner}"
+        else:
+            return f"{clean_h2}{sep}{p_open}{ts} {p_inner.lstrip()}"
+
+    html = re.sub(
+        r'(<h2>(.*?)</h2>)(\s*)(<p[^>]*>)(.*?)(?=</p>|\Z)',
+        clean_h2_and_p,
+        html,
+        flags=re.DOTALL
+    )
+
+    def strip_ts_from_h2(match):
+        inner = match.group(1)
+        clean_inner = re.sub(r'\[\d{1,2}:\d{2}(?::\d{2})?\]\s*', '', inner).strip()
+        return f"<h2>{clean_inner}</h2>"
+
+    html = re.sub(r'<h2>(.*?)</h2>', strip_ts_from_h2, html, flags=re.DOTALL)
+    return html
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -53,6 +124,13 @@ def init_db():
     columns = [row[1] for row in c.fetchall()]
     if "audio_preserved" not in columns:
         c.execute("ALTER TABLE transcriptions ADD COLUMN audio_preserved BOOLEAN DEFAULT 0")
+
+    c.execute("SELECT id, transcript FROM transcriptions WHERE transcript IS NOT NULL")
+    for row_id, raw_html in c.fetchall():
+        normalized = normalize_transcript_html(raw_html)
+        if normalized != raw_html:
+            c.execute("UPDATE transcriptions SET transcript = ? WHERE id = ?", (normalized, row_id))
+
     conn.commit()
     conn.close()
 
@@ -219,6 +297,16 @@ def process_transcription_core(
             prompt += " Inserisci i timestamp nel formato [MM:SS] all'inizio di ogni cambio logico di argomento o blocco di discorso."
         else:
             prompt += " ASSOLUTAMENTE NON INSERIRE timestamp o minutaggi nel testo."
+        if enable_chapters and enable_timestamps:
+            prompt += (
+                " NOTA BENE PER I TITOLI DI CAPITOLO E I TIMESTAMP: quando introduci un capitolo, scrivi tassativamente '## Titolo del capitolo' sulla stessa riga (es. '## Introduzione e riepilogo'). "
+                "Non lasciare mai i cancelletti '##' vuoti o isolati sulla riga. "
+                "REGOLA TASSATIVA: nei titoli di capitolo '##' NON inserire MAI timestamp o minutaggi [MM:SS]. "
+                "Il timestamp [MM:SS] deve comparire ESCLUSIVAMENTE all'inizio del paragrafo di testo sottostante, mai dentro o prima del titolo del capitolo (Esempio corretto:\n"
+                "## Titolo del capitolo\n\n[00:00] Testo della lezione...)."
+            )
+        elif enable_chapters:
+            prompt += " NOTA BENE PER I TITOLI DI CAPITOLO: quando introduci un capitolo, scrivi tassativamente '## Titolo del capitolo' sulla stessa riga. Non lasciare mai cancelletti '##' vuoti o isolati."
 
         max_retries = 3
         response = None
@@ -269,9 +357,8 @@ def process_transcription_core(
                     reconnect_timer.cancel()
 
         raw_text = response.text
-        cleaned_text = re.sub(r'(?m)^(\s*\[\d{1,2}:\d{2}(?::\d{2})?\])\s*##\s*', r'## \1 ', raw_text)
-        cleaned_text = re.sub(r'(\[\d{1,2}:\d{2}(?::\d{2})?\])\s*##\s*', r'\1 ', cleaned_text)
-        transcript_html = markdown.markdown(cleaned_text)
+        cleaned_text = clean_transcription_markdown(raw_text)
+        transcript_html = normalize_transcript_html(markdown.markdown(cleaned_text))
         if uploaded_file:
             try:
                 client.files.delete(name=uploaded_file.name)
@@ -450,7 +537,7 @@ def update_transcript(record_id: int, req: UpdateTranscriptRequest):
     params = []
     if req.transcript is not None:
         updates.append("transcript = ?")
-        params.append(req.transcript)
+        params.append(normalize_transcript_html(req.transcript))
     if req.filename is not None:
         updates.append("filename = ?")
         params.append(req.filename)

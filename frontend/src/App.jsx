@@ -433,7 +433,34 @@ export default function App() {
 
   const formattedTranscript = useMemo(() => {
     if (!transcript) return ''
-    return transcript
+    let html = transcript
+      .replace(/<h2>\s*<\/h2>\s*<p>(\s*\[\d{1,2}:\d{2}(?::\d{2})?\].*?)<\/p>/gi, '<h2>$1</h2>')
+      .replace(/<p>\s*(\[\d{1,2}:\d{2}(?::\d{2})?\])\s*##\s*(.*?)<\/p>/gi, '<h2>$2</h2>')
+      .replace(/<p>\s*##\s*(\[\d{1,2}:\d{2}(?::\d{2})?\]\s*.*?)<\/p>/gi, '<h2>$1</h2>')
+      .replace(/<p>\s*##\s*(.*?)<\/p>/gi, '<h2>$1</h2>')
+      .replace(/<h2>\s*<\/h2>\s*/gi, '')
+
+    html = html.replace(
+      /(<h2>([\s\S]*?)<\/h2>)(\s*)(<p[^>]*>)([\s\S]*?)(?=<\/p>|$)/gi,
+      (match, h2Full, h2Inner, sep, pOpen, pInner) => {
+        const tsMatch = h2Inner.match(/\[\d{1,2}:\d{2}(?::\d{2})?\]/)
+        if (!tsMatch) return match
+        const ts = tsMatch[0]
+        const cleanH2Inner = h2Inner.replace(/\[\d{1,2}:\d{2}(?::\d{2})?\]\s*/g, '').trim()
+        const cleanH2 = `<h2>${cleanH2Inner}</h2>`
+        if (/^\s*\[\d{1,2}:\d{2}(?::\d{2})?\]/.test(pInner)) {
+          return `${cleanH2}${sep}${pOpen}${pInner}`
+        }
+        return `${cleanH2}${sep}${pOpen}${ts} ${pInner.trimStart()}`
+      }
+    )
+
+    html = html.replace(/<h2>([\s\S]*?)<\/h2>/gi, (match, inner) => {
+      const cleanInner = inner.replace(/\[\d{1,2}:\d{2}(?::\d{2})?\]\s*/g, '').trim()
+      return `<h2>${cleanInner}</h2>`
+    })
+
+    return html
       .replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*##\s*/g, '[$1] ')
       .replace(
         /\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g,
