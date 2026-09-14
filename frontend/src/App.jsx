@@ -28,6 +28,11 @@ export default function App() {
 
   const [historyList, setHistoryList] = useState([])
 
+  const [apiKeyValid, setApiKeyValid] = useState(false)
+  const [isValidatingKey, setIsValidatingKey] = useState(false)
+  const [setupError, setSetupError] = useState('')
+  const [settingsError, setSettingsError] = useState('')
+
   const [file, setFile] = useState(null)
   const [isDragging, setIsDragging] = useState(false)
   const [status, setStatus] = useState('idle')
@@ -51,8 +56,6 @@ export default function App() {
     }
   }
 
-
-
   useEffect(() => {
     if (isDarkMode) {
       document.documentElement.classList.add('dark')
@@ -67,17 +70,24 @@ export default function App() {
       try {
         const data = await getStatus()
         if (ignore) return
-        if (data.api_key_configured) {
+        if (data.api_key_configured && data.api_key_valid) {
+          setApiKeyValid(true)
           setView('main')
           const history = await fetchHistory()
           if (!ignore) setHistoryList(history)
         } else {
+          setApiKeyValid(false)
           setView('setup')
+          if (data.api_key_configured && !data.api_key_valid) {
+            setSetupError('La chiave API salvata non è più valida o è stata revocata. Inserisci una nuova chiave.')
+          }
         }
       } catch (err) {
         if (ignore) return
         console.error("Server irreperibile:", err)
-        setView('main')
+        setApiKeyValid(false)
+        setView('setup')
+        setSetupError('Impossibile connettersi al server Rhesis. Assicurati che il backend sia avviato.')
       }
     }
     init()
@@ -109,8 +119,16 @@ export default function App() {
   }
 
   const handleSetupSubmit = async () => {
+    const trimmedKey = apiKeyInput.trim()
+    if (!trimmedKey) {
+      setSetupError('Inserisci la tua API Key prima di proseguire.')
+      return
+    }
+    setIsValidatingKey(true)
+    setSetupError('')
     try {
-      await setupApiKey(apiKeyInput)
+      await setupApiKey(trimmedKey)
+      setApiKeyValid(true)
       setView('main')
       setIsSettingsOpen(false)
       setApiKeyInput('')
@@ -120,14 +138,17 @@ export default function App() {
       localStorage.setItem('rhesis_chapters', tempEnableChapters)
       localStorage.setItem('rhesis_timestamps', tempEnableTimestamps)
       loadHistory()
-    } catch {
-      alert("Errore nel salvataggio della chiave.")
+    } catch (err) {
+      setSetupError(err.message || 'Chiave API Google non valida o revocata')
+    } finally {
+      setIsValidatingKey(false)
     }
   }
 
   const openSettings = () => {
     setOriginalTheme(isDarkMode)
     setApiKeyInput('')
+    setSettingsError('')
     setTempEnableChapters(enableChapters)
     setTempEnableTimestamps(enableTimestamps)
     setIsSettingsOpen(true)
@@ -150,6 +171,7 @@ export default function App() {
   const discardChanges = () => {
     setIsDarkMode(originalTheme)
     setApiKeyInput('')
+    setSettingsError('')
     setTempEnableChapters(enableChapters)
     setTempEnableTimestamps(enableTimestamps)
     setShowUnsavedWarning(false)
@@ -157,8 +179,26 @@ export default function App() {
   }
 
   const saveSettings = async () => {
-    if (apiKeyInput.trim() !== '') {
-      await handleSetupSubmit()
+    const trimmedKey = apiKeyInput.trim()
+    if (trimmedKey !== '') {
+      setIsValidatingKey(true)
+      setSettingsError('')
+      try {
+        await setupApiKey(trimmedKey)
+        setApiKeyValid(true)
+        setApiKeyInput('')
+        setOriginalTheme(isDarkMode)
+        setEnableChapters(tempEnableChapters)
+        setEnableTimestamps(tempEnableTimestamps)
+        localStorage.setItem('rhesis_chapters', tempEnableChapters)
+        localStorage.setItem('rhesis_timestamps', tempEnableTimestamps)
+        setIsSettingsOpen(false)
+        loadHistory()
+      } catch (err) {
+        setSettingsError(err.message || 'Chiave API Google non valida o revocata')
+      } finally {
+        setIsValidatingKey(false)
+      }
     } else {
       setOriginalTheme(isDarkMode)
       setEnableChapters(tempEnableChapters)
@@ -172,9 +212,11 @@ export default function App() {
   const handleLogout = async () => {
     try {
       await deleteApiKey()
+      setApiKeyValid(false)
       setView('setup')
       setIsSettingsOpen(false)
       setApiKeyInput('')
+      setSetupError('')
     } catch {
       alert("Errore durante la disconnessione.")
     }
@@ -331,19 +373,40 @@ export default function App() {
               <li>Accedi con il tuo account</li>
               <li>Clicca su "Create API Key" e copia il codice</li>
             </ol>
+            {setupError && (
+              <div className="flex items-start gap-3 p-3.5 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 rounded-xl text-red-700 dark:text-red-300 text-sm">
+                <AlertCircle className="w-5 h-5 shrink-0 text-red-500 mt-0.5" />
+                <span className="leading-snug">{setupError}</span>
+              </div>
+            )}
             <input
               type="password"
               placeholder="Incolla qui la tua API Key..."
               value={apiKeyInput}
-              onChange={(e) => setApiKeyInput(e.target.value)}
-              className="w-full bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-xl px-4 py-3 text-zinc-900 dark:text-white focus:outline-none focus:border-zinc-900 dark:focus:border-zinc-100 focus:ring-1 focus:ring-zinc-900 dark:focus:ring-zinc-100"
+              disabled={isValidatingKey}
+              onChange={(e) => {
+                setApiKeyInput(e.target.value)
+                if (setupError) setSetupError('')
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !isValidatingKey) handleSetupSubmit()
+              }}
+              className="w-full bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-xl px-4 py-3 text-zinc-900 dark:text-white focus:outline-none focus:border-zinc-900 dark:focus:border-zinc-100 focus:ring-1 focus:ring-zinc-900 dark:focus:ring-zinc-100 disabled:opacity-50"
             />
             <button
               type="button"
+              disabled={isValidatingKey}
               onClick={handleSetupSubmit}
-              className="w-full py-3 bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 font-medium rounded-xl transition-colors shadow-md"
+              className="w-full py-3 bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 font-medium rounded-xl transition-colors shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
-              Salva e Inizia
+              {isValidatingKey ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Verifica chiave...</span>
+                </>
+              ) : (
+                <span>Salva e Inizia</span>
+              )}
             </button>
           </div>
         </div>
@@ -430,15 +493,42 @@ export default function App() {
                   </button>
                 </div>
 
-                <div>
-                  <label className="block text-sm text-zinc-500 dark:text-zinc-400 mb-2">Modifica API Key</label>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-sm text-zinc-500 dark:text-zinc-400">Stato Chiave API</label>
+                    {apiKeyValid ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                        Valida
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300 border border-red-200 dark:border-red-800">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                        Non valida o Scaduta
+                      </span>
+                    )}
+                  </div>
+                  <label className="block text-xs text-zinc-400 dark:text-zinc-500">Modifica o sostituisci chiave</label>
                   <input
                     type="password"
                     placeholder="Nuova API Key..."
                     value={apiKeyInput}
-                    onChange={(e) => setApiKeyInput(e.target.value)}
-                    className="w-full bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg px-4 py-2.5 text-zinc-900 dark:text-white focus:outline-none focus:border-zinc-900 dark:focus:border-zinc-100"
+                    disabled={isValidatingKey}
+                    onChange={(e) => {
+                      setApiKeyInput(e.target.value)
+                      if (settingsError) setSettingsError('')
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !isValidatingKey) saveSettings()
+                    }}
+                    className="w-full bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg px-4 py-2.5 text-zinc-900 dark:text-white focus:outline-none focus:border-zinc-900 dark:focus:border-zinc-100 disabled:opacity-50"
                   />
+                  {settingsError && (
+                    <div className="flex items-start gap-2 p-2.5 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 rounded-lg text-red-700 dark:text-red-300 text-xs">
+                      <AlertCircle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
+                      <span>{settingsError}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-4 border-t border-zinc-200 dark:border-zinc-800 mt-4 space-y-4">
@@ -476,10 +566,18 @@ export default function App() {
                   </button>
                   <button
                     type="button"
+                    disabled={isValidatingKey}
                     onClick={saveSettings}
-                    className="flex-1 py-2.5 bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-white rounded-lg font-medium text-white dark:text-zinc-900 shadow-md"
+                    className="flex-1 py-2.5 bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-white rounded-lg font-medium text-white dark:text-zinc-900 shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >
-                    Salva
+                    {isValidatingKey ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Verifica...</span>
+                      </>
+                    ) : (
+                      <span>Salva</span>
+                    )}
                   </button>
                 </div>
 

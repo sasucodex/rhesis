@@ -74,22 +74,39 @@ class ExportRequest(BaseModel):
 class UpdateTranscriptRequest(BaseModel):
     transcript: Optional[str] = None
     filename: Optional[str] = None
+def verify_api_key(key: str) -> bool:
+    if not key or not isinstance(key, str) or len(key.strip()) < 10:
+        return False
+    try:
+        client = genai.Client(api_key=key.strip())
+        client.models.get(model="gemini-3-flash-preview")
+        return True
+    except Exception:
+        return False
+
 @app.get("/")
 def read_root():
     return {"message": "Rhesis Server is running! 🚀"}
+
 @app.get("/status")
 def check_status():
     api_key = get_saved_api_key()
+    is_configured = bool(api_key and api_key.strip())
+    is_valid = verify_api_key(api_key) if is_configured else False
     return {
         "server_running": True, 
-        "api_key_configured": api_key is not None
+        "api_key_configured": is_configured,
+        "api_key_valid": is_valid
     }
+
 @app.post("/setup")
 def setup_api_key(req: SetupRequest):
-    if not req.api_key or len(req.api_key) < 10:
-        raise HTTPException(status_code=400, detail="API Key non valida")
-    save_api_key(req.api_key)
+    key = req.api_key.strip() if req.api_key else ""
+    if not verify_api_key(key):
+        raise HTTPException(status_code=400, detail="Chiave API Google non valida o revocata")
+    save_api_key(key)
     return {"message": "Configurazione salvata con successo"}
+
 @app.delete("/setup")
 def delete_api_key():
     if os.path.exists(CONFIG_FILE):
