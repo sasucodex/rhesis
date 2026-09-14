@@ -17,6 +17,8 @@ import shutil
 import markdown
 import uuid
 from htmldocx import HtmlToDocx
+import mimetypes
+
 app = FastAPI(title="Rhesis Transcription Server")
 app.add_middleware(
     CORSMiddleware,
@@ -31,6 +33,7 @@ DB_FILE = os.path.join(CONFIG_DIR, "database.db")
 UPLOAD_DIR = os.path.join(CONFIG_DIR, "uploads")
 os.makedirs(CONFIG_DIR, exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -41,11 +44,17 @@ def init_db():
             file_path TEXT NOT NULL,
             transcript TEXT,
             status TEXT NOT NULL,
+            audio_preserved BOOLEAN DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    c.execute("PRAGMA table_info(transcriptions)")
+    columns = [row[1] for row in c.fetchall()]
+    if "audio_preserved" not in columns:
+        c.execute("ALTER TABLE transcriptions ADD COLUMN audio_preserved BOOLEAN DEFAULT 0")
     conn.commit()
     conn.close()
+
 init_db()
 def get_saved_api_key():
     if os.path.exists(CONFIG_FILE):
@@ -66,6 +75,7 @@ class TranscriptionResponse(BaseModel):
     id: int
     transcript: str
     status: str
+    audio_preserved: Optional[bool] = False
 from docx.shared import Pt, RGBColor
 class ExportRequest(BaseModel):
     text: str
@@ -117,11 +127,18 @@ def get_history():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    c.execute("SELECT id, filename, status, created_at, transcript FROM transcriptions ORDER BY id DESC")
+    c.execute("SELECT id, filename, file_path, status, created_at, transcript, audio_preserved FROM transcriptions ORDER BY id DESC")
     rows = c.fetchall()
     conn.close()
-    return [dict(row) for row in rows]
-def process_transcription_core(api_key: str, file_path: str, record_id: int, enable_chapters: bool = False, enable_timestamps: bool = False):
+    result = []
+    for row in rows:
+        item = dict(row)
+        file_path = item.pop("file_path", None)
+        item["audio_preserved"] = bool(item.get("audio_preserved", 0)) and bool(file_path and os.path.exists(file_path))
+        result.append(item)
+    return result
+
+def process_transcription_core(api_key: str, file_path: str, record_id: int, enable_chapters: bool = False, enable_timestamps: bool = False, preserve_audio: bool = False):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     try:
@@ -170,19 +187,27 @@ def process_transcription_core(api_key: str, file_path: str, record_id: int, ena
             error_msg = "Errore. L'audio potrebbe essere troppo breve, generato artificialmente, oppure i server sono momentaneamente saturi. Riprovare."
         c.execute("DELETE FROM transcriptions WHERE id = ?", (record_id,))
         conn.commit()
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except:
+                pass
         raise Exception(error_msg)
     finally:
-        try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-        except:
-            pass
+        if not preserve_audio:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except:
+                pass
         conn.close()
+
 @app.post("/transcribe/")
 def transcribe(
     file: UploadFile = File(...),
     enable_chapters: bool = Form(False),
-    enable_timestamps: bool = Form(False)
+    enable_timestamps: bool = Form(False),
+    preserve_audio: bool = Form(False)
 ):
     api_key = get_saved_api_key()
     if not api_key:
@@ -197,15 +222,54 @@ def transcribe(
         shutil.copyfileobj(file.file, buffer)
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT INTO transcriptions (filename, file_path, status) VALUES (?, ?, 'uploading')", (file.filename, file_path))
+    c.execute("INSERT INTO transcriptions (filename, file_path, status, audio_preserved) VALUES (?, ?, 'uploading', ?)", (file.filename, file_path, 1 if preserve_audio else 0))
     record_id = c.lastrowid
     conn.commit()
     conn.close()
     try:
-        transcript = process_transcription_core(api_key, file_path, record_id, enable_chapters, enable_timestamps)
-        return {"id": record_id, "transcript": transcript, "status": "success"}
+        transcript = process_transcription_core(api_key, file_path, record_id, enable_chapters, enable_timestamps, preserve_audio)
+        return {"id": record_id, "transcript": transcript, "status": "success", "audio_preserved": preserve_audio}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.api_route("/audio/{record_id}", methods=["GET", "HEAD"])
+def stream_audio(record_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT file_path, audio_preserved, filename FROM transcriptions WHERE id = ?", (record_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Trascrizione non trovata")
+    file_path, audio_preserved, orig_filename = row[0], bool(row[1]), row[2]
+    if not audio_preserved or not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File audio non disponibile o non conservato per questa trascrizione")
+    
+    media_type, _ = mimetypes.guess_type(file_path)
+    if not media_type or not media_type.startswith("audio/"):
+        ext = os.path.splitext(file_path)[1].lower()
+        audio_mimes = {
+            ".mp3": "audio/mpeg",
+            ".m4a": "audio/mp4",
+            ".wav": "audio/wav",
+            ".ogg": "audio/ogg",
+            ".flac": "audio/flac",
+            ".aac": "audio/aac",
+            ".webm": "audio/webm",
+            ".mp4": "audio/mp4",
+            ".mpeg": "audio/mpeg",
+            ".mpga": "audio/mpeg",
+            ".amr": "audio/amr",
+        }
+        media_type = audio_mimes.get(ext, "audio/mpeg")
+    
+    return FileResponse(
+        file_path,
+        media_type=media_type.lower() if media_type else "audio/mpeg",
+        filename=orig_filename,
+        content_disposition_type="inline",
+        headers={"Accept-Ranges": "bytes"}
+    )
 @app.put("/transcript/{record_id}")
 def update_transcript(record_id: int, req: UpdateTranscriptRequest):
     conn = sqlite3.connect(DB_FILE)
