@@ -23,6 +23,7 @@ export default function SettingsModal({
   setSettingsError,
   enableChapters,
   enableTimestamps,
+  preserveAudio = true,
   onSave,
   onOpenOnboarding,
   onLogout,
@@ -33,6 +34,7 @@ export default function SettingsModal({
   const [originalTheme] = useState(isDarkMode)
   const [tempEnableChapters, setTempEnableChapters] = useState(enableChapters)
   const [tempEnableTimestamps, setTempEnableTimestamps] = useState(enableTimestamps)
+  const [tempPreserveAudio, setTempPreserveAudio] = useState(preserveAudio)
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false)
 
   const hasUnsavedChanges = () => {
@@ -40,7 +42,8 @@ export default function SettingsModal({
       apiKeyInput.trim() !== '' ||
       isDarkMode !== originalTheme ||
       tempEnableChapters !== enableChapters ||
-      tempEnableTimestamps !== enableTimestamps
+      tempEnableTimestamps !== enableTimestamps ||
+      tempPreserveAudio !== preserveAudio
     )
   }
 
@@ -58,6 +61,7 @@ export default function SettingsModal({
     if (setSettingsError) setSettingsError('')
     setTempEnableChapters(enableChapters)
     setTempEnableTimestamps(enableTimestamps)
+    setTempPreserveAudio(preserveAudio)
     setShowUnsavedWarning(false)
     onClose()
   }
@@ -73,7 +77,8 @@ export default function SettingsModal({
             apiKeyInput.trim() !== '' ||
             isDarkMode !== originalTheme ||
             tempEnableChapters !== enableChapters ||
-            tempEnableTimestamps !== enableTimestamps
+            tempEnableTimestamps !== enableTimestamps ||
+            tempPreserveAudio !== preserveAudio
 
           if (hasChanges) {
             setShowUnsavedWarning(true)
@@ -85,7 +90,7 @@ export default function SettingsModal({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, showUnsavedWarning, apiKeyInput, isDarkMode, originalTheme, tempEnableChapters, enableChapters, tempEnableTimestamps, enableTimestamps, onClose])
+  }, [isOpen, showUnsavedWarning, apiKeyInput, isDarkMode, originalTheme, tempEnableChapters, enableChapters, tempEnableTimestamps, enableTimestamps, tempPreserveAudio, preserveAudio, onClose])
 
   if (!isOpen) return null
 
@@ -93,7 +98,8 @@ export default function SettingsModal({
     onSave({
       newApiKey: apiKeyInput.trim(),
       enableChapters: tempEnableChapters,
-      enableTimestamps: tempEnableTimestamps
+      enableTimestamps: tempEnableTimestamps,
+      preserveAudio: tempPreserveAudio
     })
   }
 
@@ -252,6 +258,25 @@ export default function SettingsModal({
                 <div
                   className={`absolute top-1 left-1 w-4 h-4 rounded-full transition-transform ${
                     tempEnableTimestamps ? 'translate-x-6 bg-white dark:bg-zinc-900' : 'bg-white'
+                  }`}
+                />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800">
+              <span className="font-medium text-sm text-zinc-700 dark:text-zinc-200">
+                Conserva file audio originale
+              </span>
+              <button
+                type="button"
+                onClick={() => setTempPreserveAudio(!tempPreserveAudio)}
+                className={`w-12 h-6 rounded-full relative transition-colors shrink-0 ${
+                  tempPreserveAudio ? 'bg-zinc-900 dark:bg-zinc-100' : 'bg-zinc-300 dark:bg-zinc-700'
+                }`}
+              >
+                <div
+                  className={`absolute top-1 left-1 w-4 h-4 rounded-full transition-transform ${
+                    tempPreserveAudio ? 'translate-x-6 bg-white dark:bg-zinc-900' : 'bg-white'
                   }`}
                 />
               </button>

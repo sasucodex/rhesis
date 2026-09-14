@@ -3,8 +3,9 @@ import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
 import { Bold, Italic, Underline as UnderlineIcon, Undo, Redo, Save, X } from 'lucide-react'
+import { parseTimestampToSeconds } from '../../utils/audioUtils'
 
-export default function RichTextEditor({ content, onSave, onCancel }) {
+export default function RichTextEditor({ content, onSave, onCancel, onSeek }) {
   const [, setRevision] = useState(0)
 
   const editor = useEditor({
@@ -16,6 +17,45 @@ export default function RichTextEditor({ content, onSave, onCancel }) {
     editorProps: {
       attributes: {
         class: 'prose dark:prose-invert prose-zinc max-w-none focus:outline-none min-h-[400px]',
+      },
+      handleClick: (view, pos, event) => {
+        if (!onSeek) return false
+
+        const target = event.target
+        const badge = target?.closest?.('[data-timestamp]')
+        if (badge) {
+          const timeStr = badge.getAttribute('data-timestamp')
+          const seconds = parseTimestampToSeconds(timeStr)
+          if (seconds !== null) {
+            onSeek(seconds)
+            return true
+          }
+        }
+
+        try {
+          const $pos = view.state.doc.resolve(pos)
+          const parent = $pos.parent
+          if (parent && parent.isTextblock) {
+            const text = parent.textContent
+            const offset = $pos.parentOffset
+            const regex = /\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g
+            let match
+            while ((match = regex.exec(text)) !== null) {
+              const start = match.index
+              const end = start + match[0].length
+              if (offset >= start && offset <= end) {
+                const seconds = parseTimestampToSeconds(match[1])
+                if (seconds !== null) {
+                  onSeek(seconds)
+                  return true
+                }
+              }
+            }
+          }
+        } catch {
+          return false
+        }
+        return false
       },
     },
   })
@@ -107,7 +147,20 @@ export default function RichTextEditor({ content, onSave, onCancel }) {
           </button>
         </div>
       </div>
-      <div className="p-8 overflow-y-auto custom-scrollbar flex-1 bg-white dark:bg-[#131314]">
+      <div
+        className="p-8 overflow-y-auto custom-scrollbar flex-1 bg-white dark:bg-[#131314]"
+        onClick={(e) => {
+          if (!onSeek) return
+          const badge = e.target.closest?.('[data-timestamp]')
+          if (badge) {
+            const timeStr = badge.getAttribute('data-timestamp')
+            const seconds = parseTimestampToSeconds(timeStr)
+            if (seconds !== null) {
+              onSeek(seconds)
+            }
+          }
+        }}
+      >
         <EditorContent editor={editor} />
       </div>
     </div>

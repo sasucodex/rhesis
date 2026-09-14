@@ -99,3 +99,8 @@ export async function exportDocument(format, payload) {
   }
   return res.blob()
 }
+
+export function getAudioUrl(recordId) {
+  if (!recordId) return null
+  return `${BASE_URL}/audio/${recordId}`
+}

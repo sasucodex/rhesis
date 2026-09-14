@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { FileAudio, Menu, Loader2 } from 'lucide-react'
 import {
   getStatus,
@@ -9,6 +9,7 @@ import {
   updateTranscript,
   deleteTranscript,
   exportDocument,
+  getAudioUrl,
 } from './services/api'
 import { getAbsoluteLong, getRelativeMain } from './utils/dateUtils'
 import ConfirmDeleteModal from './components/modals/ConfirmDeleteModal'
@@ -18,6 +19,8 @@ import LegalModal from './components/modals/LegalModal'
 import ReportIssueModal from './components/modals/ReportIssueModal'
 import RichTextEditor from './components/editor/RichTextEditor'
 import EditorHeader from './components/editor/EditorHeader'
+import AudioPlayerSync from './components/editor/AudioPlayerSync'
+import { parseTimestampToSeconds } from './utils/audioUtils'
 import Sidebar from './components/layout/Sidebar'
 import UploadZone from './components/upload/UploadZone'
 
@@ -44,12 +47,14 @@ export default function App() {
   const [status, setStatus] = useState('idle')
   const [transcript, setTranscript] = useState('')
   const [currentRecordId, setCurrentRecordId] = useState(null)
+  const [seekRequest, setSeekRequest] = useState(null)
   const [isEditing, setIsEditing] = useState(false)
   const [isCopied, setIsCopied] = useState(false)
   const [itemToDelete, setItemToDelete] = useState(null)
   const [errorMsg, setErrorMsg] = useState('')
   const [enableChapters, setEnableChapters] = useState(() => localStorage.getItem('rhesis_chapters') !== 'false')
   const [enableTimestamps, setEnableTimestamps] = useState(() => localStorage.getItem('rhesis_timestamps') !== 'false')
+  const [preserveAudio, setPreserveAudio] = useState(() => localStorage.getItem('rhesis_preserve_audio') !== 'false')
 
   const loadHistory = async () => {
     try {
@@ -111,6 +116,7 @@ export default function App() {
     setErrorMsg('')
     setIsEditing(false)
     setCurrentRecordId(null)
+    setSeekRequest(null)
   }
 
   const handleDelete = async (id) => {
@@ -159,7 +165,12 @@ export default function App() {
     setIsSettingsOpen(true)
   }
 
-  const handleSaveSettings = async ({ newApiKey, enableChapters: newChapters, enableTimestamps: newTimestamps }) => {
+  const handleSaveSettings = async ({
+    newApiKey,
+    enableChapters: newChapters,
+    enableTimestamps: newTimestamps,
+    preserveAudio: newPreserveAudio,
+  }) => {
     if (newApiKey) {
       setIsValidatingKey(true)
       setSettingsError('')
@@ -168,8 +179,10 @@ export default function App() {
         setApiKeyValid(true)
         setEnableChapters(newChapters)
         setEnableTimestamps(newTimestamps)
+        setPreserveAudio(newPreserveAudio)
         localStorage.setItem('rhesis_chapters', newChapters)
         localStorage.setItem('rhesis_timestamps', newTimestamps)
+        localStorage.setItem('rhesis_preserve_audio', newPreserveAudio)
         setIsSettingsOpen(false)
         loadHistory()
       } catch (err) {
@@ -182,8 +195,10 @@ export default function App() {
     } else {
       setEnableChapters(newChapters)
       setEnableTimestamps(newTimestamps)
+      setPreserveAudio(newPreserveAudio)
       localStorage.setItem('rhesis_chapters', newChapters)
       localStorage.setItem('rhesis_timestamps', newTimestamps)
+      localStorage.setItem('rhesis_preserve_audio', newPreserveAudio)
       setIsSettingsOpen(false)
     }
   }
@@ -266,6 +281,7 @@ export default function App() {
     formData.append('file', file)
     formData.append('enable_chapters', enableChapters)
     formData.append('enable_timestamps', enableTimestamps)
+    formData.append('preserve_audio', preserveAudio)
 
     try {
       const data = await transcribeAudio(formData)
@@ -309,6 +325,7 @@ export default function App() {
 
   const viewHistoryItem = (item) => {
     setIsEditing(false)
+    setSeekRequest(null)
     if (item.status === 'success' && item.transcript) {
       setCurrentRecordId(item.id)
       setTranscript(item.transcript)
@@ -350,6 +367,41 @@ export default function App() {
       alert(err.message)
     }
   }
+
+  const formattedTranscript = useMemo(() => {
+    if (!transcript) return ''
+    return transcript.replace(
+      /\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g,
+      '<button type="button" data-timestamp="$1" class="timestamp-badge inline-flex items-center gap-1 font-mono text-xs px-2 py-0.5 my-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700 font-medium select-none align-middle transition-colors cursor-pointer" title="Salta al timestamp $1">▶ $1</button>'
+    )
+  }, [transcript])
+
+  const handleTimestampClick = (e) => {
+    const badge = e.target.closest('[data-timestamp]')
+    if (badge) {
+      const timeStr = badge.getAttribute('data-timestamp')
+      const seconds = parseTimestampToSeconds(timeStr)
+      if (seconds !== null) {
+        setSeekRequest({ time: seconds, id: Date.now() })
+      }
+    }
+  }
+
+  const handleEditorSeek = (seconds) => {
+    setSeekRequest({ time: seconds, id: Date.now() })
+  }
+
+  const currentItem = historyList.find((item) => item.id === currentRecordId)
+  const fileAudioUrl = useMemo(() => {
+    if (file && file instanceof File) {
+      return URL.createObjectURL(file)
+    }
+    return null
+  }, [file])
+
+  const currentAudioUrl = (currentItem?.audio_preserved && currentRecordId)
+    ? getAudioUrl(currentRecordId)
+    : fileAudioUrl
 
   if (view === 'loading') {
     return (
@@ -410,12 +462,12 @@ export default function App() {
                 <>
                   <EditorHeader
                     filename={
-                      historyList.find((item) => item.id === currentRecordId)?.filename ||
+                      currentItem?.filename ||
                       (file ? file.name : 'Trascrizione')
                     }
                     dateStr={
-                      historyList.find((item) => item.id === currentRecordId)?.created_at
-                        ? getRelativeMain(historyList.find((item) => item.id === currentRecordId).created_at)
+                      currentItem?.created_at
+                        ? getRelativeMain(currentItem.created_at)
                         : ''
                     }
                     isEditing={isEditing}
@@ -425,16 +477,37 @@ export default function App() {
                     onExport={handleExport}
                     onEditToggle={() => setIsEditing(true)}
                   />
-                  <div className="p-8 max-h-[600px] overflow-y-auto custom-scrollbar flex-1">
-                    <div className="prose dark:prose-invert prose-zinc max-w-none prose-lg" dangerouslySetInnerHTML={{ __html: transcript }}></div>
+                  {currentAudioUrl && (
+                    <AudioPlayerSync
+                      audioUrl={currentAudioUrl}
+                      seekRequest={seekRequest}
+                    />
+                  )}
+                  <div
+                    className="p-8 max-h-[600px] overflow-y-auto custom-scrollbar flex-1"
+                    onClick={handleTimestampClick}
+                  >
+                    <div
+                      className="prose dark:prose-invert prose-zinc max-w-none prose-lg"
+                      dangerouslySetInnerHTML={{ __html: formattedTranscript }}
+                    />
                   </div>
                 </>
               ) : (
-                <RichTextEditor
-                  content={transcript}
-                  onSave={handleSaveEdit}
-                  onCancel={() => setIsEditing(false)}
-                />
+                <>
+                  {currentAudioUrl && (
+                    <AudioPlayerSync
+                      audioUrl={currentAudioUrl}
+                      seekRequest={seekRequest}
+                    />
+                  )}
+                  <RichTextEditor
+                    content={transcript}
+                    onSeek={handleEditorSeek}
+                    onSave={handleSaveEdit}
+                    onCancel={() => setIsEditing(false)}
+                  />
+                </>
               )}
             </div>
           ) : (
@@ -465,6 +538,7 @@ export default function App() {
           setSettingsError={setSettingsError}
           enableChapters={enableChapters}
           enableTimestamps={enableTimestamps}
+          preserveAudio={preserveAudio}
           onSave={handleSaveSettings}
           onOpenOnboarding={handleOpenOnboardingFromSettings}
           onLogout={handleLogout}
