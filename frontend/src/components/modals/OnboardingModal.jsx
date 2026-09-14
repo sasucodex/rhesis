@@ -33,6 +33,14 @@ export default function OnboardingModal({
   const [errorMsg, setErrorMsg] = useState(initialErrorMsg)
 
   useEffect(() => {
+    const images = [step2Img, step3Img, step4Img, step5Img]
+    images.forEach((src) => {
+      const img = new Image()
+      img.src = src
+    })
+  }, [])
+
+  useEffect(() => {
     if (!isOpen || !canClose || !onClose) return
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') onClose()
@@ -86,7 +94,7 @@ export default function OnboardingModal({
       }}
     >
       <div
-        className="relative w-full max-w-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
+        className="relative w-full max-w-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[640px] max-h-[92vh]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/80 shrink-0">
@@ -201,11 +209,11 @@ export default function OnboardingModal({
                 <ExternalLink className="w-3.5 h-3.5" />
               </a>
 
-              <div className="rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-950 shadow-md">
+              <div className="w-full aspect-[16/9] max-h-[320px] rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-950 shadow-md flex items-center justify-center">
                 <img
                   src={step2Img}
                   alt="Schermata termini e privacy Google AI Studio"
-                  className="w-full max-h-[360px] object-contain mx-auto"
+                  className="w-full h-full object-contain mx-auto"
                 />
               </div>
             </div>
@@ -222,11 +230,11 @@ export default function OnboardingModal({
                 </p>
               </div>
 
-              <div className="rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-950 shadow-md">
+              <div className="w-full aspect-[16/9] max-h-[320px] rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-950 shadow-md flex items-center justify-center">
                 <img
                   src={step3Img}
                   alt="Pulsante Crea chiave API"
-                  className="w-full max-h-[360px] object-contain mx-auto"
+                  className="w-full h-full object-contain mx-auto"
                 />
               </div>
             </div>
@@ -243,11 +251,11 @@ export default function OnboardingModal({
                 </p>
               </div>
 
-              <div className="rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-950 shadow-md">
+              <div className="w-full aspect-[16/9] max-h-[320px] rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-950 shadow-md flex items-center justify-center">
                 <img
                   src={step4Img}
                   alt="Finestra di creazione chiave e conferma progetto"
-                  className="w-full max-h-[360px] object-contain mx-auto"
+                  className="w-full h-full object-contain mx-auto"
                 />
               </div>
             </div>
@@ -264,11 +272,11 @@ export default function OnboardingModal({
                 </p>
               </div>
 
-              <div className="rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-950 shadow-md">
+              <div className="w-full aspect-[16/9] max-h-[320px] rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-950 shadow-md flex items-center justify-center">
                 <img
                   src={step5Img}
                   alt="Dettagli della chiave API con pulsante copia"
-                  className="w-full max-h-[360px] object-contain mx-auto"
+                  className="w-full h-full object-contain mx-auto"
                 />
               </div>
             </div>
@@ -349,15 +357,19 @@ export default function OnboardingModal({
         </div>
 
         <div className="flex items-center justify-between px-6 py-4 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/80 shrink-0">
-          <button
-            type="button"
-            onClick={handlePrev}
-            disabled={currentStep === 1 || isValidating}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            <span>Indietro</span>
-          </button>
+          {currentStep > 1 ? (
+            <button
+              type="button"
+              onClick={handlePrev}
+              disabled={isValidating}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              <span>Indietro</span>
+            </button>
+          ) : (
+            <div className="w-[84px]" />
+          )}
 
           <div className="flex items-center gap-1.5">
             {[1, 2, 3, 4, 5, 6].map(step => (
