@@ -106,6 +106,13 @@ def normalize_transcript_html(html: str) -> str:
     html = re.sub(r'<h2>(.*?)</h2>', strip_ts_from_h2, html, flags=re.DOTALL)
     return html
 
+def strip_html_for_fts(html_text: str) -> str:
+    if not html_text:
+        return ""
+    text = re.sub(r"<(?:p|h\d|div|br|li|tr|blockquote)[^>]*>", " ", html_text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -125,11 +132,21 @@ def init_db():
     if "audio_preserved" not in columns:
         c.execute("ALTER TABLE transcriptions ADD COLUMN audio_preserved BOOLEAN DEFAULT 0")
 
-    c.execute("SELECT id, transcript FROM transcriptions WHERE transcript IS NOT NULL")
-    for row_id, raw_html in c.fetchall():
-        normalized = normalize_transcript_html(raw_html)
-        if normalized != raw_html:
-            c.execute("UPDATE transcriptions SET transcript = ? WHERE id = ?", (normalized, row_id))
+    c.execute("DROP TRIGGER IF EXISTS transcriptions_ai")
+    c.execute("DROP TRIGGER IF EXISTS transcriptions_ad")
+    c.execute("DROP TRIGGER IF EXISTS transcriptions_au")
+    c.execute("DROP TABLE IF EXISTS transcriptions_fts")
+    c.execute('''
+        CREATE VIRTUAL TABLE IF NOT EXISTS transcriptions_fts USING fts5(
+            filename,
+            content
+        )
+    ''')
+    c.execute("SELECT id, filename, transcript FROM transcriptions WHERE status = 'success'")
+    for row in c.fetchall():
+        rid, fn, tr = row[0], row[1], row[2]
+        clean_text = strip_html_for_fts(tr)
+        c.execute("INSERT INTO transcriptions_fts(rowid, filename, content) VALUES (?, ?, ?)", (rid, fn, clean_text))
 
     conn.commit()
     conn.close()
@@ -244,6 +261,80 @@ def get_history():
         item["audio_preserved"] = bool(item.get("audio_preserved", 0)) and bool(file_path and os.path.exists(file_path))
         result.append(item)
     return result
+
+def build_fts_query(user_query: str) -> str:
+    cleaned = user_query.strip()
+    if not cleaned:
+        return ""
+    tokens = re.findall(r'[^\W_]+', cleaned, re.UNICODE)
+    if not tokens:
+        return ""
+    joined = " ".join(tokens)
+    return f'"{joined}"*'
+
+def focus_snippet_around_mark(snippet: str, max_chars_before: int = 25) -> str:
+    if not snippet or "<mark>" not in snippet:
+        return snippet.strip() if snippet else ""
+    first_mark_idx = snippet.find("<mark>")
+    if first_mark_idx <= max_chars_before:
+        return snippet.strip()
+    pre_text = snippet[:first_mark_idx]
+    cut_pos = first_mark_idx - max_chars_before
+    space_pos = pre_text.find(" ", cut_pos)
+    if space_pos != -1 and space_pos < first_mark_idx:
+        trimmed_pre = "..." + pre_text[space_pos:].lstrip()
+    else:
+        trimmed_pre = "..." + pre_text[cut_pos:]
+    return (trimmed_pre + snippet[first_mark_idx:]).strip()
+
+@app.get("/search")
+def search_transcriptions(q: str = ""):
+    fts_q = build_fts_query(q)
+    if not fts_q:
+        return []
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    try:
+        c.execute("""
+            SELECT t.id, t.filename, t.file_path, t.transcript, t.status, t.audio_preserved, t.created_at,
+                   snippet(transcriptions_fts, 1, '<mark>', '</mark>', '...', 12) as content_snippet,
+                   snippet(transcriptions_fts, 0, '<mark>', '</mark>', '...', 12) as title_snippet
+            FROM transcriptions_fts f
+            JOIN transcriptions t ON t.id = f.rowid
+            WHERE transcriptions_fts MATCH ? AND t.status = 'success'
+            ORDER BY rank
+        """, (fts_q,))
+        rows = c.fetchall()
+    except Exception:
+        pattern = f"%{q.strip()}%"
+        c.execute("""
+            SELECT id, filename, file_path, transcript, status, audio_preserved, created_at,
+                   '' as content_snippet, '' as title_snippet
+            FROM transcriptions
+            WHERE status = 'success' AND (filename LIKE ? OR transcript LIKE ?)
+            ORDER BY id DESC
+        """, (pattern, pattern))
+        rows = c.fetchall()
+    finally:
+        conn.close()
+
+    result = []
+    for row in rows:
+        item = dict(row)
+        file_path = item.pop("file_path", None)
+        item["audio_preserved"] = bool(item.get("audio_preserved", 0)) and bool(file_path and os.path.exists(file_path))
+        c_snip = item.pop("content_snippet", "") or ""
+        t_snip = item.pop("title_snippet", "") or ""
+        if "<mark>" in c_snip:
+            item["snippet"] = focus_snippet_around_mark(c_snip)
+        elif "<mark>" in t_snip:
+            item["snippet"] = focus_snippet_around_mark(t_snip)
+        else:
+            item["snippet"] = (c_snip.strip() or t_snip.strip())[:80]
+        result.append(item)
+    return result
+
 
 def process_transcription_core(
     api_key: str,
@@ -366,6 +457,11 @@ def process_transcription_core(
                 pass
 
         c.execute("UPDATE transcriptions SET transcript = ?, status = 'success', created_at = CURRENT_TIMESTAMP WHERE id = ?", (transcript_html, record_id))
+        clean_text = strip_html_for_fts(transcript_html)
+        c.execute("SELECT filename FROM transcriptions WHERE id = ?", (record_id,))
+        fn_row = c.fetchone()
+        cur_fn = fn_row[0] if fn_row else ""
+        c.execute("INSERT OR REPLACE INTO transcriptions_fts(rowid, filename, content) VALUES (?, ?, ?)", (record_id, cur_fn, clean_text))
         conn.commit()
 
         if not preserve_audio and os.path.exists(file_path):
@@ -544,9 +640,15 @@ def update_transcript(record_id: int, req: UpdateTranscriptRequest):
     if updates:
         params.append(record_id)
         c.execute(f"UPDATE transcriptions SET {', '.join(updates)} WHERE id = ?", tuple(params))
+        c.execute("SELECT filename, transcript FROM transcriptions WHERE id = ?", (record_id,))
+        row = c.fetchone()
+        if row:
+            fn, tr = row[0], row[1]
+            c.execute("INSERT OR REPLACE INTO transcriptions_fts(rowid, filename, content) VALUES (?, ?, ?)", (record_id, fn, strip_html_for_fts(tr)))
         conn.commit()
     conn.close()
     return {"message": "Success"}
+
 @app.delete("/transcript/{record_id}")
 def delete_transcript(record_id: int):
     conn = sqlite3.connect(DB_FILE)
@@ -559,6 +661,7 @@ def delete_transcript(record_id: int):
         except:
             pass
     c.execute("DELETE FROM transcriptions WHERE id = ?", (record_id,))
+    c.execute("DELETE FROM transcriptions_fts WHERE rowid = ?", (record_id,))
     conn.commit()
     conn.close()
     return {"message": "Success"}

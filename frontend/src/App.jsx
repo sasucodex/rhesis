@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { FileAudio, Menu, Loader2 } from 'lucide-react'
 import {
   getStatus,
@@ -37,6 +37,8 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
 
   const [historyList, setHistoryList] = useState([])
+  const [activeSearchQuery, setActiveSearchQuery] = useState('')
+  const transcriptContainerRef = useRef(null)
 
   const [apiKeyValid, setApiKeyValid] = useState(false)
   const [isValidatingKey, setIsValidatingKey] = useState(false)
@@ -460,13 +462,36 @@ export default function App() {
       return `<h2>${cleanInner}</h2>`
     })
 
-    return html
+    html = html
       .replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*##\s*/g, '[$1] ')
       .replace(
         /\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g,
         '<button type="button" data-timestamp="$1" class="timestamp-badge inline-flex items-center gap-1 font-mono text-xs px-2 py-0.5 my-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700 font-medium select-none align-middle transition-colors cursor-pointer" title="Salta al timestamp $1">▶ $1</button>'
       )
-  }, [transcript])
+
+    if (activeSearchQuery && activeSearchQuery.trim()) {
+      const escaped = activeSearchQuery.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const regex = new RegExp(`(?![^<]*>)(${escaped})`, 'gi')
+      html = html.replace(
+        regex,
+        '<mark class="search-highlight bg-amber-200 dark:bg-amber-900/60 dark:text-amber-200 text-zinc-900 rounded-xs px-0.5 font-medium">$1</mark>'
+      )
+    }
+
+    return html
+  }, [transcript, activeSearchQuery])
+
+  useEffect(() => {
+    if (activeSearchQuery && currentRecordId) {
+      const timer = setTimeout(() => {
+        const firstMatch = transcriptContainerRef.current?.querySelector('.search-highlight')
+        if (firstMatch) {
+          firstMatch.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }
+      }, 100)
+      return () => clearTimeout(timer)
+    }
+  }, [activeSearchQuery, currentRecordId, formattedTranscript])
 
   const handleTimestampClick = (e) => {
     const badge = e.target.closest('[data-timestamp]')
@@ -527,6 +552,7 @@ export default function App() {
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         onOpenSettings={openSettings}
+        onSearchQueryChange={setActiveSearchQuery}
       />
 
       <div className="flex-1 flex flex-col h-full overflow-y-auto custom-scrollbar bg-zinc-50 dark:bg-[#09090b] relative">
@@ -576,6 +602,7 @@ export default function App() {
                     />
                   )}
                   <div
+                    ref={transcriptContainerRef}
                     className="p-8 max-h-[600px] overflow-y-auto custom-scrollbar flex-1"
                     onClick={handleTimestampClick}
                   >

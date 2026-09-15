@@ -40,6 +40,16 @@ export async function fetchHistory() {
   return res.json()
 }
 
+export async function searchTranscriptions(query) {
+  if (!query || !query.trim()) return []
+  const res = await fetch(`${BASE_URL}/search?q=${encodeURIComponent(query.trim())}`)
+  if (!res.ok) {
+    throw new Error('Errore durante la ricerca')
+  }
+  return res.json()
+}
+
+
 export async function transcribeAudio(formData) {
   const res = await fetch(`${BASE_URL}/transcribe/`, {
     method: 'POST',
