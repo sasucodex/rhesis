@@ -168,10 +168,10 @@ const AudioPlayerSync = forwardRef(function AudioPlayerSync(
           <button
             type="button"
             onClick={togglePlay}
-            className="p-2 bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 rounded-full transition-transform active:scale-95 shadow-sm"
+            className="p-2 bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 rounded-full transition-transform active:scale-95 shadow-sm flex items-center justify-center"
             title={isPlaying ? 'Pausa' : 'Riproduci'}
           >
-            {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 translate-x-0.5" />}
+            {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
           </button>
 
           <button

@@ -3,7 +3,6 @@ import {
   FileAudio,
   Menu,
   Plus,
-  MessageSquare,
   Trash2,
   Settings,
   Search,
@@ -340,19 +339,11 @@ export default function Sidebar({
                 >
                   <div className="flex items-center justify-between w-full">
                     <div className="flex items-center gap-2.5 overflow-hidden flex-1 mr-2">
-                      {item.course_color ? (
+                      {item.course_color && (
                         <span
                           className="w-2 h-2 rounded-full shrink-0"
                           style={{ backgroundColor: item.course_color }}
                           title={item.course_name || 'Corso'}
-                        />
-                      ) : (
-                        <MessageSquare
-                          className={`w-4 h-4 shrink-0 ${
-                            isSelected
-                              ? 'text-zinc-900 dark:text-zinc-100'
-                              : 'text-zinc-400'
-                          }`}
                         />
                       )}
                       <span
