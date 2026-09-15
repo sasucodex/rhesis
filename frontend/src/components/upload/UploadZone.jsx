@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { UploadCloud, AlertCircle } from 'lucide-react'
+import { UploadCloud, AlertCircle, BookOpen, Plus } from 'lucide-react'
 import ProcessingStatus from './ProcessingStatus'
 
 export default function UploadZone({
@@ -13,6 +13,10 @@ export default function UploadZone({
   onDragLeave,
   onDrop,
   task,
+  courses = [],
+  selectedCourseId = null,
+  onSelectCourse = () => {},
+  onCreateCourse = () => {},
 }) {
   const fileInputRef = useRef(null)
 
@@ -23,6 +27,8 @@ export default function UploadZone({
       </div>
     )
   }
+
+  const selectedCourse = courses.find((c) => c.id === selectedCourseId)
 
   return (
     <div className="w-full space-y-8 flex flex-col items-center">
@@ -44,36 +50,87 @@ export default function UploadZone({
             : 'border-zinc-300 dark:border-zinc-800 bg-white dark:bg-[#131314] hover:border-zinc-400 dark:hover:border-zinc-700 shadow-sm'
         } ${status === 'uploading' || status === 'transcribing' ? 'opacity-50 pointer-events-none' : ''}`}
       >
-          <>
-            <div className="p-4 bg-zinc-100 dark:bg-zinc-800/50 rounded-full shadow-inner mb-2">
-              <UploadCloud className="w-10 h-10 text-zinc-400" />
+        <div className="p-4 bg-zinc-100 dark:bg-zinc-800/50 rounded-full shadow-inner mb-2">
+          <UploadCloud className="w-10 h-10 text-zinc-400" />
+        </div>
+        <div>
+          <h3 className="text-xl font-medium text-zinc-700 dark:text-zinc-200">
+            {file ? file.name : "Trascina l'audio qui"}
+          </h3>
+          <p className="text-sm text-zinc-500 mt-1 max-w-[400px] text-center">
+            {file
+              ? `${(file.size / (1024 * 1024)).toFixed(2)} MB`
+              : 'Formati supportati: MP3, M4A, WAV, OGG, FLAC, AAC, MP4, WEBM, MPEG, MPGA, AMR'}
+          </p>
+        </div>
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={onFileSelect}
+          className="hidden"
+          accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac,.aac,.mp4,.webm,.mpeg,.mpga,.amr"
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="mt-4 px-6 py-2.5 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 font-medium rounded-full hover:bg-zinc-800 dark:hover:bg-white transition-colors shadow-md"
+        >
+          Sfoglia file
+        </button>
+      </div>
+
+      {file && (status === 'idle' || status === 'error') && (
+        <div className="w-full max-w-md bg-white dark:bg-[#131314] border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 shadow-sm space-y-3 animate-in fade-in duration-300">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>Corso / Materia</span>
             </div>
-            <div>
-              <h3 className="text-xl font-medium text-zinc-700 dark:text-zinc-200">
-                {file ? file.name : "Trascina l'audio qui"}
-              </h3>
-              <p className="text-sm text-zinc-500 mt-1 max-w-[400px] text-center">
-                {file
-                  ? `${(file.size / (1024 * 1024)).toFixed(2)} MB`
-                  : 'Formati supportati: MP3, M4A, WAV, OGG, FLAC, AAC, MP4, WEBM, MPEG, MPGA, AMR'}
-              </p>
-            </div>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={onFileSelect}
-              className="hidden"
-              accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac,.aac,.mp4,.webm,.mpeg,.mpga,.amr"
-            />
             <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="mt-4 px-6 py-2.5 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 font-medium rounded-full hover:bg-zinc-800 dark:hover:bg-white transition-colors shadow-md"
+              onClick={onCreateCourse}
+              className="text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 font-medium flex items-center gap-1 transition-colors"
             >
-              Sfoglia file
+              <Plus className="w-3.5 h-3.5" />
+              Nuovo corso
             </button>
-          </>
-      </div>
+          </div>
+
+          <div className="relative">
+            <select
+              value={selectedCourseId || ''}
+              onChange={(e) => {
+                const val = e.target.value
+                onSelectCourse(val ? Number(val) : null)
+              }}
+              className="w-full appearance-none px-3.5 py-2.5 bg-zinc-50 dark:bg-zinc-900/80 border border-zinc-200 dark:border-zinc-700 rounded-xl text-zinc-900 dark:text-zinc-100 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-100 cursor-pointer pr-10"
+            >
+              <option value="">Nessun corso (Generale)</option>
+              {courses.map((course) => (
+                <option key={course.id} value={course.id}>
+                  {course.name} {course.professor_name ? `(${course.professor_name})` : ''}
+                </option>
+              ))}
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-zinc-400">
+              <span className="text-xs">▼</span>
+            </div>
+          </div>
+
+          {selectedCourse && (
+            <div className="flex items-center gap-2 pt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              <span
+                className="w-2.5 h-2.5 rounded-full shrink-0"
+                style={{ backgroundColor: selectedCourse.color }}
+              />
+              <span className="truncate">
+                {selectedCourse.name}
+                {selectedCourse.professor_name && ` • ${selectedCourse.professor_name}`}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       {file && (status === 'idle' || status === 'error') && (
         <div className="flex justify-center w-full animate-in fade-in zoom-in duration-300">

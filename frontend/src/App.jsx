@@ -5,6 +5,10 @@ import {
   setupApiKey,
   deleteApiKey,
   fetchHistory,
+  fetchCourses,
+  createCourse,
+  updateCourse,
+  deleteCourse,
   transcribeAudio,
   getTaskStatus,
   updateTranscript,
@@ -18,6 +22,7 @@ import OnboardingModal from './components/modals/OnboardingModal'
 import SettingsModal from './components/modals/SettingsModal'
 import LegalModal from './components/modals/LegalModal'
 import ReportIssueModal from './components/modals/ReportIssueModal'
+import CourseModal from './components/courses/CourseModal'
 import RichTextEditor from './components/editor/RichTextEditor'
 import EditorHeader from './components/editor/EditorHeader'
 import AudioPlayerSync from './components/editor/AudioPlayerSync'
@@ -32,9 +37,15 @@ export default function App() {
   const [isLegalModalOpen, setIsLegalModalOpen] = useState(false)
   const [legalActiveTab, setLegalActiveTab] = useState('termini')
   const [isReportIssueOpen, setIsReportIssueOpen] = useState(false)
+  const [isCourseModalOpen, setIsCourseModalOpen] = useState(false)
+  const [courseToEdit, setCourseToEdit] = useState(null)
   const [lastError, setLastError] = useState('')
   const [isDarkMode, setIsDarkMode] = useState(true)
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
+
+  const [courses, setCourses] = useState([])
+  const [selectedCourseId, setSelectedCourseId] = useState(null)
+  const [uploadCourseId, setUploadCourseId] = useState(null)
 
   const [historyList, setHistoryList] = useState([])
   const [activeSearchQuery, setActiveSearchQuery] = useState('')
@@ -61,12 +72,21 @@ export default function App() {
   const [enableTimestamps, setEnableTimestamps] = useState(() => localStorage.getItem('rhesis_timestamps') !== 'false')
   const [preserveAudio, setPreserveAudio] = useState(() => localStorage.getItem('rhesis_preserve_audio') !== 'false')
 
+  const loadCourses = async () => {
+    try {
+      const data = await fetchCourses()
+      setCourses(data)
+    } catch (err) {
+      console.error('Errore recupero corsi:', err)
+    }
+  }
+
   const loadHistory = async () => {
     try {
       const data = await fetchHistory()
       setHistoryList(data)
     } catch (err) {
-      console.error("Errore history:", err)
+      console.error('Errore history:', err)
     }
   }
 
@@ -87,8 +107,14 @@ export default function App() {
         if (data.api_key_configured && data.api_key_valid) {
           setApiKeyValid(true)
           setView('main')
-          const history = await fetchHistory()
-          if (!ignore) setHistoryList(history)
+          const [history, coursesData] = await Promise.all([
+            fetchHistory(),
+            fetchCourses(),
+          ])
+          if (!ignore) {
+            setHistoryList(history)
+            setCourses(coursesData)
+          }
         } else {
           setApiKeyValid(false)
           setView('setup')
@@ -100,7 +126,7 @@ export default function App() {
         }
       } catch (err) {
         if (ignore) return
-        console.error("Server irreperibile:", err)
+        console.error('Server irreperibile:', err)
         setApiKeyValid(false)
         setView('setup')
         const msg = 'Impossibile connettersi al server Rhesis. Assicurati che il backend sia avviato.'
@@ -124,6 +150,7 @@ export default function App() {
     setSeekRequest(null)
     setCurrentTaskId(null)
     setCurrentTask(null)
+    setUploadCourseId(selectedCourseId)
   }
 
   const handleDelete = async (id) => {
@@ -134,9 +161,10 @@ export default function App() {
         startNewTranscription()
       }
       loadHistory()
+      loadCourses()
     } catch (err) {
       setLastError(err.message || 'Errore durante la cancellazione.')
-      console.error("Errore cancellazione:", err)
+      console.error('Errore cancellazione:', err)
     }
   }
 
@@ -157,6 +185,7 @@ export default function App() {
       setIsSettingsOpen(false)
       setIsOnboardingOpen(false)
       loadHistory()
+      loadCourses()
     } catch (err) {
       const msg = err.message || 'Chiave API Google non valida o revocata'
       setSetupError(msg)
@@ -192,6 +221,7 @@ export default function App() {
         localStorage.setItem('rhesis_preserve_audio', newPreserveAudio)
         setIsSettingsOpen(false)
         loadHistory()
+        loadCourses()
       } catch (err) {
         const msg = err.message || 'Chiave API Google non valida o revocata'
         setSettingsError(msg)
@@ -238,6 +268,51 @@ export default function App() {
     setIsOnboardingOpen(true)
   }
 
+  const handleOpenCreateCourse = () => {
+    setCourseToEdit(null)
+    setIsCourseModalOpen(true)
+  }
+
+  const handleOpenEditCourse = (course) => {
+    setCourseToEdit(course)
+    setIsCourseModalOpen(true)
+  }
+
+  const handleCreateOrUpdateCourse = async (courseData) => {
+    if (courseToEdit) {
+      await updateCourse(courseToEdit.id, courseData)
+    } else {
+      const created = await createCourse(courseData)
+      if (status === 'idle' || status === 'error') {
+        setUploadCourseId(created.id)
+      }
+    }
+    await Promise.all([loadCourses(), loadHistory()])
+  }
+
+  const handleDeleteCourse = async (courseId) => {
+    await deleteCourse(courseId)
+    if (selectedCourseId === courseId) {
+      setSelectedCourseId(null)
+    }
+    if (uploadCourseId === courseId) {
+      setUploadCourseId(null)
+    }
+    await Promise.all([loadCourses(), loadHistory()])
+  }
+
+  const handleChangeLessonCourse = async (recordId, newCourseId) => {
+    const targetId = recordId || currentRecordId
+    if (!targetId) return
+    try {
+      await updateTranscript(targetId, { course_id: newCourseId ? Number(newCourseId) : 0 })
+      await Promise.all([loadHistory(), loadCourses()])
+    } catch (err) {
+      setLastError(err.message)
+      alert(err.message)
+    }
+  }
+
   const handleDragOver = (e) => {
     e.preventDefault()
     setIsDragging(true)
@@ -261,6 +336,9 @@ export default function App() {
     setErrorMsg('')
     setFile(selectedFile)
     setStatus('idle')
+    if (selectedCourseId && !uploadCourseId) {
+      setUploadCourseId(selectedCourseId)
+    }
   }
 
   const handleDrop = (e) => {
@@ -300,6 +378,7 @@ export default function App() {
             setCurrentTaskId(null)
             setCurrentTask(null)
             loadHistory()
+            loadCourses()
           }, 1200)
         } else if (taskData.status === 'error') {
           clearInterval(pollInterval)
@@ -342,6 +421,14 @@ export default function App() {
     formData.append('enable_chapters', enableChapters)
     formData.append('enable_timestamps', enableTimestamps)
     formData.append('preserve_audio', preserveAudio)
+    if (uploadCourseId) {
+      formData.append('course_id', uploadCourseId)
+      const matchedCourse = courses.find((c) => c.id === uploadCourseId)
+      if (matchedCourse) {
+        if (matchedCourse.name) formData.append('course_name', matchedCourse.name)
+        if (matchedCourse.professor_name) formData.append('professor_name', matchedCourse.professor_name)
+      }
+    }
 
     try {
       const data = await transcribeAudio(formData)
@@ -399,7 +486,7 @@ export default function App() {
   }
 
   const copyToClipboard = () => {
-    const tempDiv = document.createElement("div")
+    const tempDiv = document.createElement('div')
     tempDiv.innerHTML = transcript
     navigator.clipboard.writeText(tempDiv.innerText)
     setIsCopied(true)
@@ -410,7 +497,7 @@ export default function App() {
     try {
       const currentItem = historyList.find((item) => item.id === currentRecordId)
       const originalName = currentItem ? currentItem.filename.replace(/^\d+_/, '') : 'Trascrizione'
-      const rawName = originalName.replace(/\.[^/.]+$/, "")
+      const rawName = originalName.replace(/\.[^/.]+$/, '')
       const absDate = currentItem ? getAbsoluteLong(currentItem.created_at) : ''
       const titleForDoc = absDate ? `${rawName} - ${absDate}` : rawName
       const fileName = `${titleForDoc}.${format === 'word' ? 'docx' : 'pdf'}`
@@ -419,6 +506,8 @@ export default function App() {
         text: transcript,
         filename: rawName,
         date_str: absDate,
+        course_name: currentItem?.course_name || '',
+        professor_name: currentItem?.professor_name || '',
       })
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -545,6 +634,12 @@ export default function App() {
     <div className="flex h-screen bg-zinc-50 dark:bg-[#09090b] text-zinc-900 dark:text-zinc-100 transition-colors overflow-hidden relative">
       <Sidebar
         historyList={historyList}
+        courses={courses}
+        selectedCourseId={selectedCourseId}
+        onSelectCourse={setSelectedCourseId}
+        onCreateCourse={handleOpenCreateCourse}
+        onEditCourse={handleOpenEditCourse}
+        onAssignCourse={handleChangeLessonCourse}
         currentRecordId={currentRecordId}
         onSelectRecord={viewHistoryItem}
         onNewTranscription={startNewTranscription}
@@ -641,6 +736,10 @@ export default function App() {
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
               task={currentTask}
+              courses={courses}
+              selectedCourseId={uploadCourseId}
+              onSelectCourse={setUploadCourseId}
+              onCreateCourse={handleOpenCreateCourse}
             />
           )}
         </div>
@@ -666,6 +765,17 @@ export default function App() {
           onOpenReportIssue={handleOpenReportIssue}
         />
       )}
+
+      <CourseModal
+        isOpen={isCourseModalOpen}
+        onClose={() => {
+          setIsCourseModalOpen(false)
+          setCourseToEdit(null)
+        }}
+        onSave={handleCreateOrUpdateCourse}
+        courseToEdit={courseToEdit}
+        onDelete={handleDeleteCourse}
+      />
 
       <ConfirmDeleteModal
         isOpen={Boolean(itemToDelete)}

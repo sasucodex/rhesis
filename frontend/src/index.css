@@ -40,6 +40,10 @@
 }
 
 
+.custom-scrollbar {
+  scrollbar-gutter: stable;
+}
+
 .dark ::-webkit-scrollbar-thumb {
   background-color: rgba(82, 82, 91, 0.5);
 }

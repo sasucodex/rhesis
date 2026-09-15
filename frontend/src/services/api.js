@@ -32,8 +32,54 @@ export async function deleteApiKey() {
   return res.json()
 }
 
-export async function fetchHistory() {
-  const res = await fetch(`${BASE_URL}/history`)
+export async function fetchCourses() {
+  const res = await fetch(`${BASE_URL}/courses`)
+  if (!res.ok) {
+    throw new Error('Errore nel recupero dei corsi')
+  }
+  return res.json()
+}
+
+export async function createCourse(courseData) {
+  const res = await fetch(`${BASE_URL}/courses`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(courseData),
+  })
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}))
+    throw new Error(errorData.detail || 'Errore nella creazione del corso')
+  }
+  return res.json()
+}
+
+export async function updateCourse(courseId, courseData) {
+  const res = await fetch(`${BASE_URL}/courses/${courseId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(courseData),
+  })
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}))
+    throw new Error(errorData.detail || 'Errore nella modifica del corso')
+  }
+  return res.json()
+}
+
+export async function deleteCourse(courseId) {
+  const res = await fetch(`${BASE_URL}/courses/${courseId}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}))
+    throw new Error(errorData.detail || "Errore durante l'eliminazione del corso")
+  }
+  return res.json()
+}
+
+export async function fetchHistory(courseId) {
+  const url = courseId ? `${BASE_URL}/history?course_id=${encodeURIComponent(courseId)}` : `${BASE_URL}/history`
+  const res = await fetch(url)
   if (!res.ok) {
     throw new Error('Errore nel recupero della cronologia')
   }

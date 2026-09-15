@@ -6,6 +6,7 @@ from typing import Optional
 import os
 import re
 import time
+import html
 from google import genai
 from google.genai import types
 import json
@@ -13,11 +14,15 @@ import tempfile
 import sqlite3
 from datetime import datetime
 from docx import Document
-from fpdf import FPDF
+from docx.shared import Pt, RGBColor, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import parse_xml
+from docx.oxml.ns import nsdecls
 import shutil
 import markdown
 import uuid
 from htmldocx import HtmlToDocx
+from xhtml2pdf import pisa
 import mimetypes
 
 app = FastAPI(title="Rhesis Transcription Server")
@@ -117,6 +122,15 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''
+        CREATE TABLE IF NOT EXISTS courses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            color TEXT NOT NULL DEFAULT '#2563eb',
+            professor_name TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    c.execute('''
         CREATE TABLE IF NOT EXISTS transcriptions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             filename TEXT NOT NULL,
@@ -124,6 +138,9 @@ def init_db():
             transcript TEXT,
             status TEXT NOT NULL,
             audio_preserved BOOLEAN DEFAULT 0,
+            course_id INTEGER REFERENCES courses(id) ON DELETE SET NULL,
+            course_name TEXT,
+            professor_name TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -131,6 +148,12 @@ def init_db():
     columns = [row[1] for row in c.fetchall()]
     if "audio_preserved" not in columns:
         c.execute("ALTER TABLE transcriptions ADD COLUMN audio_preserved BOOLEAN DEFAULT 0")
+    if "course_id" not in columns:
+        c.execute("ALTER TABLE transcriptions ADD COLUMN course_id INTEGER REFERENCES courses(id) ON DELETE SET NULL")
+    if "course_name" not in columns:
+        c.execute("ALTER TABLE transcriptions ADD COLUMN course_name TEXT")
+    if "professor_name" not in columns:
+        c.execute("ALTER TABLE transcriptions ADD COLUMN professor_name TEXT")
 
     c.execute("DROP TRIGGER IF EXISTS transcriptions_ai")
     c.execute("DROP TRIGGER IF EXISTS transcriptions_ad")
@@ -167,19 +190,31 @@ def save_api_key(key: str):
         json.dump({"api_key": key}, f)
 class SetupRequest(BaseModel):
     api_key: str
+class CourseCreateRequest(BaseModel):
+    name: str
+    color: Optional[str] = "#2563eb"
+    professor_name: Optional[str] = None
+class CourseUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
+    professor_name: Optional[str] = None
 class TranscriptionResponse(BaseModel):
     id: int
     transcript: str
     status: str
     audio_preserved: Optional[bool] = False
-from docx.shared import Pt, RGBColor
 class ExportRequest(BaseModel):
     text: str
     filename: str = "Trascrizione"
-    date_str: str = ""
+    date_str: Optional[str] = ""
+    course_name: Optional[str] = ""
+    professor_name: Optional[str] = ""
 class UpdateTranscriptRequest(BaseModel):
     transcript: Optional[str] = None
     filename: Optional[str] = None
+    course_id: Optional[int] = None
+    course_name: Optional[str] = None
+    professor_name: Optional[str] = None
 def verify_api_key(key: str) -> bool:
     if not key or not isinstance(key, str) or len(key.strip()) < 10:
         return False
@@ -246,12 +281,129 @@ def cleanup_old_tasks():
         for tid in expired:
             del TASKS[tid]
 
-@app.get("/history")
-def get_history():
+@app.get("/courses")
+def get_courses():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    c.execute("SELECT id, filename, file_path, status, created_at, transcript, audio_preserved FROM transcriptions WHERE status = 'success' ORDER BY id DESC")
+    c.execute("""
+        SELECT c.id, c.name, c.color, c.professor_name, c.created_at,
+               COUNT(t.id) as transcriptions_count
+        FROM courses c
+        LEFT JOIN transcriptions t ON t.course_id = c.id AND t.status = 'success'
+        GROUP BY c.id
+        ORDER BY c.name COLLATE NOCASE ASC
+    """)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+@app.post("/courses")
+def create_course(req: CourseCreateRequest):
+    name = req.name.strip() if req.name else ""
+    if not name:
+        raise HTTPException(status_code=400, detail="Il nome del corso è obbligatorio.")
+    color = req.color.strip() if req.color else "#2563eb"
+    prof = req.professor_name.strip() if req.professor_name else None
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT id FROM courses WHERE LOWER(name) = LOWER(?)", (name,))
+    if c.fetchone():
+        conn.close()
+        raise HTTPException(status_code=400, detail="Un corso con questo nome esiste già.")
+    c.execute(
+        "INSERT INTO courses (name, color, professor_name) VALUES (?, ?, ?)",
+        (name, color, prof)
+    )
+    course_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return {
+        "id": course_id,
+        "name": name,
+        "color": color,
+        "professor_name": prof,
+        "transcriptions_count": 0
+    }
+
+@app.put("/courses/{course_id}")
+def update_course(course_id: int, req: CourseUpdateRequest):
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT id, name, color, professor_name FROM courses WHERE id = ?", (course_id,))
+    course = c.fetchone()
+    if not course:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Corso non trovato.")
+
+    new_name = req.name.strip() if req.name is not None else course["name"]
+    if not new_name:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Il nome del corso non può essere vuoto.")
+
+    if new_name.lower() != course["name"].lower():
+        c.execute("SELECT id FROM courses WHERE LOWER(name) = LOWER(?) AND id != ?", (new_name, course_id))
+        if c.fetchone():
+            conn.close()
+            raise HTTPException(status_code=400, detail="Un altro corso con questo nome esiste già.")
+
+    new_color = req.color.strip() if req.color is not None else course["color"]
+    new_prof = req.professor_name.strip() if req.professor_name is not None else course["professor_name"]
+    if new_prof == "":
+        new_prof = None
+
+    c.execute(
+        "UPDATE courses SET name = ?, color = ?, professor_name = ? WHERE id = ?",
+        (new_name, new_color, new_prof, course_id)
+    )
+    c.execute("UPDATE transcriptions SET course_name = ? WHERE course_id = ?", (new_name, course_id))
+    conn.commit()
+
+    c.execute("""
+        SELECT c.id, c.name, c.color, c.professor_name, c.created_at,
+               COUNT(t.id) as transcriptions_count
+        FROM courses c
+        LEFT JOIN transcriptions t ON t.course_id = c.id AND t.status = 'success'
+        WHERE c.id = ?
+        GROUP BY c.id
+    """, (course_id,))
+    updated = c.fetchone()
+    conn.close()
+    return dict(updated)
+
+@app.delete("/courses/{course_id}")
+def delete_course(course_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE transcriptions SET course_id = NULL WHERE course_id = ?", (course_id,))
+    c.execute("DELETE FROM courses WHERE id = ?", (course_id,))
+    conn.commit()
+    conn.close()
+    return {"message": "Corso eliminato con successo"}
+
+@app.get("/history")
+def get_history(course_id: Optional[int] = None):
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    query = """
+        SELECT t.id, t.filename, t.file_path, t.status, t.created_at, t.transcript, t.audio_preserved,
+               t.course_id,
+               COALESCE(c.name, t.course_name) as course_name,
+               COALESCE(c.professor_name, t.professor_name) as professor_name,
+               c.color as course_color
+        FROM transcriptions t
+        LEFT JOIN courses c ON t.course_id = c.id
+        WHERE t.status = 'success'
+    """
+    params = []
+    if course_id is not None and course_id > 0:
+        query += " AND t.course_id = ?"
+        params.append(course_id)
+    query += " ORDER BY t.id DESC"
+    c.execute(query, tuple(params))
     rows = c.fetchall()
     conn.close()
     result = []
@@ -297,11 +449,17 @@ def search_transcriptions(q: str = ""):
     c = conn.cursor()
     try:
         c.execute("""
-            SELECT t.id, t.filename, t.file_path, t.transcript, t.status, t.audio_preserved, t.created_at,
+            SELECT t.id, t.filename, t.file_path, t.transcript, t.status, t.audio_preserved,
+                   t.course_id,
+                   COALESCE(c.name, t.course_name) as course_name,
+                   COALESCE(c.professor_name, t.professor_name) as professor_name,
+                   c.color as course_color,
+                   t.created_at,
                    snippet(transcriptions_fts, 1, '<mark>', '</mark>', '...', 12) as content_snippet,
                    snippet(transcriptions_fts, 0, '<mark>', '</mark>', '...', 12) as title_snippet
             FROM transcriptions_fts f
             JOIN transcriptions t ON t.id = f.rowid
+            LEFT JOIN courses c ON t.course_id = c.id
             WHERE transcriptions_fts MATCH ? AND t.status = 'success'
             ORDER BY rank
         """, (fts_q,))
@@ -309,11 +467,17 @@ def search_transcriptions(q: str = ""):
     except Exception:
         pattern = f"%{q.strip()}%"
         c.execute("""
-            SELECT id, filename, file_path, transcript, status, audio_preserved, created_at,
+            SELECT t.id, t.filename, t.file_path, t.transcript, t.status, t.audio_preserved,
+                   t.course_id,
+                   COALESCE(c.name, t.course_name) as course_name,
+                   COALESCE(c.professor_name, t.professor_name) as professor_name,
+                   c.color as course_color,
+                   t.created_at,
                    '' as content_snippet, '' as title_snippet
-            FROM transcriptions
-            WHERE status = 'success' AND (filename LIKE ? OR transcript LIKE ?)
-            ORDER BY id DESC
+            FROM transcriptions t
+            LEFT JOIN courses c ON t.course_id = c.id
+            WHERE t.status = 'success' AND (t.filename LIKE ? OR t.transcript LIKE ?)
+            ORDER BY t.id DESC
         """, (pattern, pattern))
         rows = c.fetchall()
     finally:
@@ -530,7 +694,10 @@ def transcribe(
     file: UploadFile = File(...),
     enable_chapters: bool = Form(False),
     enable_timestamps: bool = Form(False),
-    preserve_audio: bool = Form(False)
+    preserve_audio: bool = Form(False),
+    course_id: Optional[int] = Form(None),
+    course_name: Optional[str] = Form(None),
+    professor_name: Optional[str] = Form(None)
 ):
     cleanup_old_tasks()
     api_key = get_saved_api_key()
@@ -546,7 +713,22 @@ def transcribe(
         shutil.copyfileobj(file.file, buffer)
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT INTO transcriptions (filename, file_path, status, audio_preserved) VALUES (?, ?, 'processing', ?)", (file.filename, file_path, 1 if preserve_audio else 0))
+
+    course_id_val = None
+    if course_id is not None and course_id > 0:
+        course_id_val = course_id
+        c.execute("SELECT name, professor_name FROM courses WHERE id = ?", (course_id_val,))
+        c_row = c.fetchone()
+        if c_row:
+            if not course_name:
+                course_name = c_row[0]
+            if not professor_name and c_row[1]:
+                professor_name = c_row[1]
+
+    c.execute(
+        "INSERT INTO transcriptions (filename, file_path, status, audio_preserved, course_name, professor_name, course_id) VALUES (?, ?, 'processing', ?, ?, ?, ?)",
+        (file.filename, file_path, 1 if preserve_audio else 0, course_name, professor_name, course_id_val)
+    )
     record_id = c.lastrowid
     conn.commit()
     conn.close()
@@ -625,6 +807,7 @@ def stream_audio(record_id: int):
         content_disposition_type="inline",
         headers={"Accept-Ranges": "bytes"}
     )
+
 @app.put("/transcript/{record_id}")
 def update_transcript(record_id: int, req: UpdateTranscriptRequest):
     conn = sqlite3.connect(DB_FILE)
@@ -637,6 +820,28 @@ def update_transcript(record_id: int, req: UpdateTranscriptRequest):
     if req.filename is not None:
         updates.append("filename = ?")
         params.append(req.filename)
+    if req.course_id is not None:
+        if req.course_id > 0:
+            updates.append("course_id = ?")
+            params.append(req.course_id)
+            c.execute("SELECT name, professor_name FROM courses WHERE id = ?", (req.course_id,))
+            c_row = c.fetchone()
+            if c_row:
+                updates.append("course_name = ?")
+                params.append(c_row[0])
+                if c_row[1] and req.professor_name is None:
+                    updates.append("professor_name = ?")
+                    params.append(c_row[1])
+        else:
+            updates.append("course_id = NULL")
+            updates.append("course_name = NULL")
+            updates.append("professor_name = NULL")
+    if req.course_name is not None and (req.course_id is None or req.course_id > 0):
+        updates.append("course_name = ?")
+        params.append(req.course_name)
+    if req.professor_name is not None and (req.course_id is None or req.course_id > 0):
+        updates.append("professor_name = ?")
+        params.append(req.professor_name)
     if updates:
         params.append(record_id)
         c.execute(f"UPDATE transcriptions SET {', '.join(updates)} WHERE id = ?", tuple(params))
@@ -665,42 +870,246 @@ def delete_transcript(record_id: int):
     conn.commit()
     conn.close()
     return {"message": "Success"}
+
+def sanitize_html_for_export(html_str: str) -> str:
+    if not html_str:
+        return ""
+    text = re.sub(r"</?mark[^>]*>", "", html_str)
+    text = re.sub(r"""<button[^>]*data-timestamp=["']([^"']+)["'][^>]*>.*?</button>""", r"[\1]", text)
+    text = re.sub(r"<button[^>]*>(.*?)</button>", r"\1", text)
+    text = re.sub(r"<h2>\s*</h2>", "", text)
+    text = re.sub(r"<p>\s*</p>", "", text)
+    return text
+
 @app.post("/export/word")
 def export_word(req: ExportRequest):
     doc = Document()
-    heading = doc.add_heading(req.filename, 0)
-    if req.date_str:
-        run = heading.add_run(f"  {req.date_str}")
-        run.font.color.rgb = RGBColor(128, 128, 128)
-        run.font.size = Pt(14)
-    new_parser = HtmlToDocx()
-    new_parser.add_html_to_document(req.text, doc)
+    for section in doc.sections:
+        section.top_margin = Cm(2.5)
+        section.bottom_margin = Cm(2.5)
+        section.left_margin = Cm(2.5)
+        section.right_margin = Cm(2.5)
+
+        footer = section.footer
+        footer_para = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+        footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+
+        r1 = footer_para.add_run("Pagina ")
+        r1.font.name = "Arial"
+        r1.font.size = Pt(9)
+        r1.font.color.rgb = RGBColor(113, 113, 122)
+
+        fld_page = f'<w:fldSimple {nsdecls("w")} w:instr="PAGE"><w:r><w:rPr><w:rFonts w:ascii="Arial"/><w:sz w:val="18"/><w:color w:val="71717A"/></w:rPr><w:t>1</w:t></w:r></w:fldSimple>'
+        footer_para._p.append(parse_xml(fld_page))
+
+        r2 = footer_para.add_run(" di ")
+        r2.font.name = "Arial"
+        r2.font.size = Pt(9)
+        r2.font.color.rgb = RGBColor(113, 113, 122)
+
+        fld_numpages = f'<w:fldSimple {nsdecls("w")} w:instr="NUMPAGES"><w:r><w:rPr><w:rFonts w:ascii="Arial"/><w:sz w:val="18"/><w:color w:val="71717A"/></w:rPr><w:t>1</w:t></w:r></w:fldSimple>'
+        footer_para._p.append(parse_xml(fld_numpages))
+
+    style_normal = doc.styles["Normal"]
+    style_normal.font.name = "Arial"
+    style_normal.font.size = Pt(11)
+    style_normal.font.color.rgb = RGBColor(24, 24, 27)
+
+    title_text = (req.filename or "Trascrizione").strip()
+    title_p = doc.add_paragraph()
+    title_run = title_p.add_run(title_text)
+    title_run.font.name = "Arial"
+    title_run.font.size = Pt(18)
+    title_run.font.bold = True
+    title_run.font.color.rgb = RGBColor(9, 9, 11)
+    title_p.paragraph_format.space_before = Pt(0)
+    title_p.paragraph_format.space_after = Pt(6)
+
+    clean_date = req.date_str.strip() if req.date_str and req.date_str.strip() else ""
+    clean_course = req.course_name.strip() if req.course_name and req.course_name.strip() else ""
+    clean_prof = req.professor_name.strip() if req.professor_name and req.professor_name.strip() else ""
+
+    meta_items = []
+    if clean_date:
+        meta_items.append(("Data", clean_date))
+    if clean_course:
+        meta_items.append(("Corso", clean_course))
+    if clean_prof:
+        meta_items.append(("Docente", clean_prof))
+
+    for label, val in meta_items:
+        mp = doc.add_paragraph()
+        mp.paragraph_format.space_before = Pt(0)
+        mp.paragraph_format.space_after = Pt(2)
+        r_lbl = mp.add_run(f"{label.upper()}: ")
+        r_lbl.font.name = "Arial"
+        r_lbl.font.size = Pt(9)
+        r_lbl.font.bold = True
+        r_lbl.font.color.rgb = RGBColor(113, 113, 122)
+        r_val = mp.add_run(val)
+        r_val.font.name = "Arial"
+        r_val.font.size = Pt(9.5)
+        r_val.font.color.rgb = RGBColor(39, 39, 42)
+
+    if meta_items:
+        div_p = doc.add_paragraph()
+        div_p.paragraph_format.space_before = Pt(4)
+        div_p.paragraph_format.space_after = Pt(12)
+    else:
+        title_p.paragraph_format.space_after = Pt(14)
+
+    clean_body = sanitize_html_for_export(req.text)
+    parser = HtmlToDocx()
+    parser.add_html_to_document(clean_body, doc)
+
+    meta_labels = [m[0].upper() for m in meta_items]
+    for p in doc.paragraphs:
+        if p != title_p and not any(p.text.startswith(f"{lbl}:") for lbl in meta_labels):
+            p.paragraph_format.line_spacing = 1.2
+            if not p.text.startswith("##") and not p.style.name.startswith("Heading"):
+                p.paragraph_format.space_after = Pt(6)
+
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
     doc.save(temp_file.name)
-    return FileResponse(temp_file.name, media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document', filename="Trascrizione.docx")
-from xhtml2pdf import pisa
+    download_name = f"{title_text}.docx"
+    return FileResponse(
+        temp_file.name,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=download_name
+    )
+
 @app.post("/export/pdf")
 def export_pdf(req: ExportRequest):
-    date_html = f' <span style="color: gray; font-size: 14pt;">{req.date_str}</span>' if req.date_str else ""
-    html_content = f"""
-    <html>
-    <head>
-    <meta charset="utf-8">
-    <style>
-    body {  font-family: Helvetica, sans-serif; font-size: 12pt; color: #333; } 
-    h1 {  text-align: left; font-size: 18pt; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; } 
-    </style>
-    </head>
-    <body>
-    <h1>{req.filename}{date_html}</h1>
-    {req.text}
-    </body>
-    </html>
-    """
+    title_text = (req.filename or "Trascrizione").strip()
+    clean_title = html.escape(title_text)
+    clean_date = html.escape(req.date_str.strip()) if req.date_str and req.date_str.strip() else ""
+    clean_course = html.escape(req.course_name.strip()) if req.course_name and req.course_name.strip() else ""
+    clean_prof = html.escape(req.professor_name.strip()) if req.professor_name and req.professor_name.strip() else ""
+
+    meta_rows = []
+    if clean_date and clean_prof:
+        meta_rows.append(f'<tr><td class="meta-val"><span class="meta-lbl">Data:</span> {clean_date}</td><td class="meta-val" style="text-align: right;"><span class="meta-lbl">Docente:</span> {clean_prof}</td></tr>')
+    elif clean_date:
+        meta_rows.append(f'<tr><td class="meta-val" colspan="2"><span class="meta-lbl">Data:</span> {clean_date}</td></tr>')
+    elif clean_prof:
+        meta_rows.append(f'<tr><td class="meta-val" colspan="2"><span class="meta-lbl">Docente:</span> {clean_prof}</td></tr>')
+
+    if clean_course:
+        meta_rows.append(f'<tr><td class="meta-val" colspan="2"><span class="meta-lbl">Corso:</span> {clean_course}</td></tr>')
+
+    meta_html = ""
+    if meta_rows:
+        meta_html = f'<table class="meta-table">{"".join(meta_rows)}</table>'
+
+    sanitized_body = sanitize_html_for_export(req.text)
+    sanitized_body = re.sub(
+        r'\[(\d{1,2}:\d{2}(?::\d{2})?)\]',
+        r'<span style="color: #52525b; font-family: Courier, monospace; font-size: 9.5pt; font-weight: bold;">[\1]</span>',
+        sanitized_body
+    )
+
+    full_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+@page {{
+    size: a4 portrait;
+    margin-top: 20mm;
+    margin-bottom: 22mm;
+    margin-left: 20mm;
+    margin-right: 20mm;
+    @frame footer_frame {{
+        -pdf-frame-content: footerContent;
+        bottom: 8mm;
+        margin-left: 20mm;
+        margin-right: 20mm;
+        height: 10mm;
+    }}
+}}
+body {{
+    font-family: Helvetica, Arial, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.55;
+    color: #18181b;
+}}
+.header-box {{
+    border-bottom: 1.5pt solid #18181b;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}}
+.title {{
+    font-size: 19pt;
+    font-weight: bold;
+    color: #09090b;
+    margin-bottom: 6px;
+}}
+.meta-table {{
+    width: 100%;
+    margin-top: 6px;
+    border-collapse: collapse;
+}}
+.meta-lbl {{
+    font-size: 8.5pt;
+    font-weight: bold;
+    color: #71717a;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}}
+.meta-val {{
+    font-size: 9.5pt;
+    color: #27272a;
+    padding-top: 2px;
+    padding-bottom: 2px;
+}}
+.footer {{
+    text-align: right;
+    font-size: 8.5pt;
+    color: #71717a;
+    border-top: 0.5pt solid #e4e4e7;
+    padding-top: 4px;
+}}
+h2 {{
+    font-size: 13pt;
+    font-weight: bold;
+    color: #09090b;
+    margin-top: 16px;
+    margin-bottom: 6px;
+    border-bottom: 0.5pt solid #e4e4e7;
+    padding-bottom: 3px;
+}}
+p {{
+    margin-bottom: 10px;
+    text-align: justify;
+}}
+</style>
+</head>
+<body>
+<div id="footerContent" class="footer">
+    Pagina <pdf:pagenumber> di <pdf:pagecount>
+</div>
+
+<div class="header-box">
+    <div class="title">{clean_title}</div>
+    {meta_html}
+</div>
+
+{sanitized_body}
+</body>
+</html>"""
+
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     with open(temp_file.name, "wb") as f:
-        pisa.CreatePDF(html_content, dest=f)
-    return FileResponse(temp_file.name, media_type='application/pdf', filename="Trascrizione.pdf")
+        res = pisa.CreatePDF(full_html, dest=f)
+        if res.err:
+            raise HTTPException(status_code=500, detail="Errore durante la generazione del file PDF")
+
+    download_name = f"{title_text}.pdf"
+    return FileResponse(
+        temp_file.name,
+        media_type="application/pdf",
+        filename=download_name
+    )
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
