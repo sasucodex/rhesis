@@ -8,7 +8,8 @@ import re
 import time
 import html
 from google import genai
-from google.genai import types
+from google.genai import types, errors
+import httpx
 import json
 import tempfile
 import sqlite3
@@ -215,15 +216,40 @@ class UpdateTranscriptRequest(BaseModel):
     course_id: Optional[int] = None
     course_name: Optional[str] = None
     professor_name: Optional[str] = None
-def verify_api_key(key: str) -> bool:
+def check_api_key_status(key: str, retry_on_unreachable: bool = True) -> tuple[Optional[bool], str]:
     if not key or not isinstance(key, str) or len(key.strip()) < 10:
-        return False
-    try:
-        client = genai.Client(api_key=key.strip())
-        client.models.get(model="gemini-3-flash-preview")
-        return True
-    except Exception:
-        return False
+        return False, "invalid"
+
+    attempts = 2 if retry_on_unreachable else 1
+    cleaned_key = key.strip()
+
+    for attempt in range(attempts):
+        try:
+            client = genai.Client(api_key=cleaned_key)
+            client.models.get(model="gemini-3-flash-preview")
+            return True, "valid"
+        except errors.ClientError as e:
+            if getattr(e, "code", None) in (400, 401, 403):
+                return False, "invalid"
+            return None, "unreachable"
+        except errors.ServerError:
+            if attempt < attempts - 1:
+                time.sleep(1)
+                continue
+            return None, "unreachable"
+        except (httpx.RequestError, httpx.TimeoutException, OSError):
+            if attempt < attempts - 1:
+                time.sleep(1)
+                continue
+            return None, "unreachable"
+        except Exception:
+            return None, "unreachable"
+
+    return None, "unreachable"
+
+def verify_api_key(key: str) -> bool:
+    is_valid, _ = check_api_key_status(key)
+    return is_valid is True
 
 @app.get("/")
 def read_root():
@@ -233,18 +259,34 @@ def read_root():
 def check_status():
     api_key = get_saved_api_key()
     is_configured = bool(api_key and api_key.strip())
-    is_valid = verify_api_key(api_key) if is_configured else False
+    if not is_configured:
+        return {
+            "server_running": True,
+            "api_key_configured": False,
+            "api_key_valid": False,
+            "api_key_status": "unconfigured"
+        }
+
+    is_valid, status = check_api_key_status(api_key, retry_on_unreachable=True)
     return {
         "server_running": True, 
-        "api_key_configured": is_configured,
-        "api_key_valid": is_valid
+        "api_key_configured": True,
+        "api_key_valid": is_valid,
+        "api_key_status": status
     }
 
 @app.post("/setup")
 def setup_api_key(req: SetupRequest):
     key = req.api_key.strip() if req.api_key else ""
-    if not verify_api_key(key):
+    if not key:
+        raise HTTPException(status_code=400, detail="La chiave API non può essere vuota")
+
+    is_valid, status = check_api_key_status(key, retry_on_unreachable=False)
+    if status == "invalid":
         raise HTTPException(status_code=400, detail="Chiave API Google non valida o revocata")
+    if status == "unreachable":
+        raise HTTPException(status_code=400, detail="Impossibile verificare la chiave con Google: connessione internet assente o irraggiungibile.")
+
     save_api_key(key)
     return {"message": "Configurazione salvata con successo"}
 
@@ -650,7 +692,9 @@ def process_transcription_core(
         return transcript_html
     except Exception as e:
         error_msg = str(e)
-        if '503' in error_msg or 'high demand' in error_msg.lower():
+        if any(kw in error_msg.lower() for kw in ['401', 'unauthenticated', 'api key not valid', 'api_key_invalid', 'permission_denied', 'consumer_invalid']):
+            error_msg = "Chiave API non valida o scaduta. Per avviare la trascrizione è necessario configurare una chiave API funzionante."
+        elif '503' in error_msg or 'high demand' in error_msg.lower():
             error_msg = "I server di Google sono momentaneamente saturi (High Demand). Riprova tra qualche minuto."
 
         if uploaded_file and client:
@@ -701,8 +745,8 @@ def transcribe(
 ):
     cleanup_old_tasks()
     api_key = get_saved_api_key()
-    if not api_key:
-        raise HTTPException(status_code=401, detail="API Key not configured.")
+    if not api_key or len(api_key.strip()) < 10:
+        raise HTTPException(status_code=401, detail="Chiave API non configurata o scaduta. Configurala nelle Impostazioni.")
     ext = os.path.splitext(file.filename)[1].lower() if file.filename else ""
     allowed_exts = {'.mp3', '.m4a', '.wav', '.ogg', '.flac', '.aac', '.mp4', '.webm', '.mpeg', '.mpga', '.amr'}
     if ext not in allowed_exts:

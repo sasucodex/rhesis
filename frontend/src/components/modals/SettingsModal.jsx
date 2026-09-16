@@ -9,7 +9,8 @@ import {
   ShieldCheck,
   LifeBuoy,
   BookOpen,
-  LogOut
+  LogOut,
+  Info
 } from 'lucide-react'
 
 export default function SettingsModal({
@@ -18,6 +19,7 @@ export default function SettingsModal({
   isDarkMode,
   setIsDarkMode,
   apiKeyValid,
+  apiKeyStatus = 'valid',
   isValidatingKey,
   settingsError,
   setSettingsError,
@@ -181,13 +183,28 @@ export default function SettingsModal({
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="block text-sm text-zinc-500 dark:text-zinc-400 font-medium">
-                Stato Chiave API
-              </label>
+              <div className="flex items-center gap-1.5">
+                <label className="block text-sm text-zinc-500 dark:text-zinc-400 font-medium">
+                  Stato Chiave API
+                </label>
+                <button
+                  type="button"
+                  onClick={() => onOpenOnboarding && onOpenOnboarding(2)}
+                  title="Come ottenere una chiave API Google"
+                  className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                >
+                  <Info className="w-3.5 h-3.5" />
+                </button>
+              </div>
               {apiKeyValid ? (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
                   Valida
+                </span>
+              ) : apiKeyStatus === 'unreachable' ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                  Non verificata (Offline)
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300 border border-red-200 dark:border-red-800">

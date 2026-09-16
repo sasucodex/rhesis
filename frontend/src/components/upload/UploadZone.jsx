@@ -17,6 +17,7 @@ export default function UploadZone({
   selectedCourseId = null,
   onSelectCourse = () => {},
   onCreateCourse = () => {},
+  onOpenSettings = () => {},
 }) {
   const fileInputRef = useRef(null)
 
@@ -147,9 +148,21 @@ export default function UploadZone({
       {status === 'error' && (
         <div className="w-full p-4 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-2xl flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-red-500 dark:text-red-400 shrink-0 mt-0.5" />
-          <div>
+          <div className="flex-1">
             <h4 className="text-red-600 dark:text-red-400 font-medium">Ops, si è verificato un errore</h4>
             <p className="text-red-500/80 dark:text-red-400/80 text-sm mt-1">{errorMsg}</p>
+            {(errorMsg?.toLowerCase().includes('chiave') ||
+              errorMsg?.toLowerCase().includes('api') ||
+              errorMsg?.toLowerCase().includes('scaduta') ||
+              errorMsg?.includes('401')) && (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 dark:text-red-300 bg-red-100/80 dark:bg-red-950/60 hover:bg-red-200 dark:hover:bg-red-900/60 rounded-lg transition-colors border border-red-200 dark:border-red-800/80"
+              >
+                <span>Configura Chiave API nelle Impostazioni</span>
+              </button>
+            )}
           </div>
         </div>
       )}

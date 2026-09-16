@@ -24,9 +24,10 @@ export default function OnboardingModal({
   onComplete,
   onClose,
   canClose = false,
-  initialErrorMsg = ''
+  initialErrorMsg = '',
+  initialStep = 1,
 }) {
-  const [currentStep, setCurrentStep] = useState(1)
+  const [currentStep, setCurrentStep] = useState(initialStep)
   const [apiKey, setApiKey] = useState('')
   const [showKey, setShowKey] = useState(false)
   const [isValidating, setIsValidating] = useState(false)
