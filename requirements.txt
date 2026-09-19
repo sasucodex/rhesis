@@ -3,4 +3,7 @@ fastapi
 uvicorn
 python-multipart
 python-docx
-fpdf2
+htmldocx
+xhtml2pdf
+markdown
+httpx
