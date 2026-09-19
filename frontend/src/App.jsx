@@ -128,7 +128,7 @@ export default function App() {
             setApiKeyValid(false)
             setApiKeyStatus('invalid')
             setView('setup')
-            const msg = 'La chiave API salvata non è più valida o è stata revocata. Inserisci una nuova chiave.'
+            const msg = 'Il codice di accesso salvato non sembra più valido o è scaduto. Inserisci o aggiorna il tuo codice personale.'
             setSetupError(msg)
             setLastError(msg)
             return
@@ -201,12 +201,20 @@ export default function App() {
           }
         }
       } catch {
-        // Nessuna azione se il server o la rete sono momentaneamente irraggiungibili
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setApiKeyValid(false)
+          setApiKeyStatus('unreachable')
+        }
       }
     }
 
     const onOnline = () => {
       handleRevalidate()
+    }
+
+    const onOffline = () => {
+      setApiKeyValid(false)
+      setApiKeyStatus('unreachable')
     }
 
     const onVisibilityChange = () => {
@@ -216,10 +224,12 @@ export default function App() {
     }
 
     window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
     document.addEventListener('visibilitychange', onVisibilityChange)
 
     return () => {
       window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [])
@@ -255,7 +265,7 @@ export default function App() {
   const handleSetupSubmit = async (keyParam) => {
     const keyToValidate = typeof keyParam === 'string' ? keyParam.trim() : ''
     if (!keyToValidate) {
-      const msg = 'Inserisci la tua API Key prima di proseguire.'
+      const msg = 'Inserisci il tuo codice personale prima di proseguire.'
       setSetupError(msg)
       setLastError(msg)
       return
@@ -272,7 +282,7 @@ export default function App() {
       loadHistory()
       loadCourses()
     } catch (err) {
-      const msg = err.message || 'Chiave API Google non valida o revocata'
+      const msg = err.message || 'Il codice inserito non sembra corretto o è incompleto. Assicurati di averlo copiato per intero e riprova.'
       setSetupError(msg)
       setLastError(msg)
       throw err
@@ -283,6 +293,30 @@ export default function App() {
 
   const openSettings = () => {
     setSettingsError('')
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setApiKeyValid(false)
+      setApiKeyStatus('unreachable')
+    } else {
+      getStatus()
+        .then((data) => {
+          if (data.api_key_configured) {
+            if (data.api_key_status === 'valid' || data.api_key_valid === true) {
+              setApiKeyValid(true)
+              setApiKeyStatus('valid')
+            } else if (data.api_key_status === 'invalid') {
+              setApiKeyValid(false)
+              setApiKeyStatus('invalid')
+            } else if (data.api_key_status === 'unreachable') {
+              setApiKeyValid(false)
+              setApiKeyStatus('unreachable')
+            }
+          }
+        })
+        .catch(() => {
+          setApiKeyValid(false)
+          setApiKeyStatus('unreachable')
+        })
+    }
     setIsSettingsOpen(true)
   }
 
@@ -309,7 +343,7 @@ export default function App() {
         loadHistory()
         loadCourses()
       } catch (err) {
-        const msg = err.message || 'Chiave API Google non valida o revocata'
+        const msg = err.message || 'Il codice inserito non sembra corretto o è incompleto. Assicurati di averlo copiato per intero e riprova.'
         setSettingsError(msg)
         setLastError(msg)
       } finally {
@@ -471,14 +505,38 @@ export default function App() {
         } else if (taskData.status === 'error') {
           clearInterval(pollInterval)
           const rawMsg = taskData.error || taskData.message || 'Errore durante la trascrizione'
+          const isOfflineErr =
+            (typeof navigator !== 'undefined' && !navigator.onLine) ||
+            rawMsg.toLowerCase().includes('connessione') ||
+            rawMsg.toLowerCase().includes('internet') ||
+            rawMsg.toLowerCase().includes('name resolution') ||
+            rawMsg.toLowerCase().includes('temporary failure') ||
+            rawMsg.toLowerCase().includes('network') ||
+            rawMsg.toLowerCase().includes('errno -3') ||
+            rawMsg.toLowerCase().includes('errno -2') ||
+            rawMsg.toLowerCase().includes('errno 101') ||
+            rawMsg.toLowerCase().includes('gaierror') ||
+            rawMsg.toLowerCase().includes('getaddrinfo') ||
+            rawMsg.toLowerCase().includes('unreachable') ||
+            rawMsg.toLowerCase().includes('offline')
+
           const isAuthErr =
-            rawMsg.includes('401') ||
-            rawMsg.toLowerCase().includes('unauthenticated') ||
-            rawMsg.toLowerCase().includes('chiave') ||
-            rawMsg.toLowerCase().includes('api key')
-          const cleanMsg = isAuthErr
-            ? 'Chiave API non valida o scaduta. Per avviare la trascrizione è necessario configurare una chiave API funzionante.'
-            : rawMsg
+            !isOfflineErr &&
+            (rawMsg.includes('401') ||
+              rawMsg.toLowerCase().includes('unauthenticated') ||
+              rawMsg.toLowerCase().includes('chiave') ||
+              rawMsg.toLowerCase().includes('api key') ||
+              rawMsg.toLowerCase().includes('codice') ||
+              rawMsg.toLowerCase().includes('accesso'))
+
+          let cleanMsg = rawMsg
+          if (isOfflineErr) {
+            cleanMsg = 'Connessione a Internet assente o non raggiungibile. Verifica la tua connessione Wi-Fi o di rete e riprova.'
+            setApiKeyValid(false)
+            setApiKeyStatus('unreachable')
+          } else if (isAuthErr) {
+            cleanMsg = 'Accesso Google non attivo o da verificare. Per trascrivere è necessario attivare il tuo codice gratuito Google nelle Impostazioni.'
+          }
           setErrorMsg(cleanMsg)
           setLastError(cleanMsg)
           setStatus('error')
@@ -502,6 +560,25 @@ export default function App() {
 
   const handleTranscribe = async () => {
     if (!file) return
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      const offlineMsg = 'Connessione a Internet assente. Verifica la tua connessione Wi-Fi o di rete e riprova.'
+      setErrorMsg(offlineMsg)
+      setLastError(offlineMsg)
+      setStatus('error')
+      setApiKeyValid(false)
+      setApiKeyStatus('unreachable')
+      return
+    }
+
+    if (!apiKeyValid && apiKeyStatus !== 'unreachable') {
+      const authMsg = 'Accesso Google non attivo o da verificare. Per trascrivere è necessario attivare il tuo codice gratuito Google nelle Impostazioni.'
+      setErrorMsg(authMsg)
+      setLastError(authMsg)
+      setStatus('error')
+      return
+    }
+
     setStatus('processing')
     setErrorMsg('')
     setTranscript('')
@@ -535,14 +612,39 @@ export default function App() {
       }))
     } catch (err) {
       const rawMsg = err.message || ''
+      const isOfflineErr =
+        (typeof navigator !== 'undefined' && !navigator.onLine) ||
+        rawMsg.toLowerCase().includes('connessione') ||
+        rawMsg.toLowerCase().includes('internet') ||
+        rawMsg.toLowerCase().includes('name resolution') ||
+        rawMsg.toLowerCase().includes('temporary failure') ||
+        rawMsg.toLowerCase().includes('network') ||
+        rawMsg.toLowerCase().includes('errno -3') ||
+        rawMsg.toLowerCase().includes('errno -2') ||
+        rawMsg.toLowerCase().includes('errno 101') ||
+        rawMsg.toLowerCase().includes('gaierror') ||
+        rawMsg.toLowerCase().includes('getaddrinfo') ||
+        rawMsg.toLowerCase().includes('unreachable') ||
+        rawMsg.toLowerCase().includes('offline') ||
+        rawMsg.toLowerCase().includes('failed to fetch')
+
       const isAuthErr =
-        rawMsg.includes('401') ||
-        rawMsg.toLowerCase().includes('unauthenticated') ||
-        rawMsg.toLowerCase().includes('chiave') ||
-        rawMsg.toLowerCase().includes('api key')
-      const cleanMsg = isAuthErr
-        ? 'Chiave API non valida o scaduta. Per avviare la trascrizione è necessario configurare una chiave API funzionante.'
-        : rawMsg || 'Errore durante la trascrizione.'
+        !isOfflineErr &&
+        (rawMsg.includes('401') ||
+          rawMsg.toLowerCase().includes('unauthenticated') ||
+          rawMsg.toLowerCase().includes('chiave') ||
+          rawMsg.toLowerCase().includes('api key') ||
+          rawMsg.toLowerCase().includes('codice') ||
+          rawMsg.toLowerCase().includes('accesso'))
+
+      let cleanMsg = rawMsg || 'Errore durante la trascrizione.'
+      if (isOfflineErr) {
+        cleanMsg = 'Connessione a Internet assente o non raggiungibile. Verifica la tua connessione Wi-Fi o di rete e riprova.'
+        setApiKeyValid(false)
+        setApiKeyStatus('unreachable')
+      } else if (isAuthErr) {
+        cleanMsg = 'Accesso Google non attivo o da verificare. Per trascrivere è necessario attivare il tuo codice gratuito Google nelle Impostazioni.'
+      }
       setErrorMsg(cleanMsg)
       setLastError(cleanMsg)
       setStatus('error')
@@ -779,9 +881,9 @@ export default function App() {
               <div className="flex items-start sm:items-center gap-3">
                 <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
                 <div>
-                  <p className="text-sm font-semibold">Chiave API non configurata o scaduta</p>
+                  <p className="text-sm font-semibold">Accesso Google: Non collegato o da verificare</p>
                   <p className="text-xs text-amber-800/80 dark:text-amber-300/80">
-                    Per poter trascrivere nuove lezioni universitarie è necessario inserire una chiave valida.
+                    Per poter trascrivere nuove lezioni universitarie è necessario attivare il tuo codice gratuito Google nelle Impostazioni.
                   </p>
                 </div>
               </div>
@@ -790,7 +892,7 @@ export default function App() {
                 onClick={openSettings}
                 className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 rounded-xl text-xs font-semibold whitespace-nowrap transition-colors shadow-xs shrink-0 self-start sm:self-auto"
               >
-                Configura Chiave API
+                Attiva Accesso Gratuito
               </button>
             </div>
           )}
@@ -866,6 +968,8 @@ export default function App() {
               onSelectCourse={setUploadCourseId}
               onCreateCourse={handleOpenCreateCourse}
               onOpenSettings={openSettings}
+              apiKeyValid={apiKeyValid}
+              apiKeyStatus={apiKeyStatus}
             />
           )}
         </div>

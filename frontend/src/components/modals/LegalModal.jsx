@@ -120,7 +120,7 @@ export default function LegalModal({ isOpen, activeTab = 'termini', onClose }) {
                   4. Esclusione di Responsabilità
                 </h4>
                 <p>
-                  Lo sviluppatore e i collaboratori del progetto Rhesis declinano qualunque responsabilità civile, penale o disciplinare derivante dall'uso improprio, illecito o non autorizzato dell'applicazione da parte dell'utente. L'utente si assume l'intera responsabilità per le registrazioni effettuate e per i dati elaborati tramite la propria chiave API.
+                  Lo sviluppatore e i collaboratori del progetto Rhesis declinano qualunque responsabilità civile, penale o disciplinare derivante dall'uso improprio, illecito o non autorizzato dell'applicazione da parte dell'utente. L'utente si assume l'intera responsabilità per le registrazioni effettuate e per i dati elaborati tramite il proprio codice di accesso Google.
                 </p>
               </section>
             </>
@@ -131,7 +131,7 @@ export default function LegalModal({ isOpen, activeTab = 'termini', onClose }) {
                   1. Sovranità dei Dati e Salvataggio Locale
                 </h4>
                 <p>
-                  Rhesis è progettato seguendo il principio cardine della sovranità dei dati: tutti i dati dell'utente, inclusi il database SQLite (<code className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-xs font-mono text-zinc-800 dark:text-zinc-200">~/.config/rhesis/database.db</code>), le impostazioni e la chiave API (<code className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-xs font-mono text-zinc-800 dark:text-zinc-200">~/.config/rhesis/config.json</code>) e gli eventuali file audio conservati risiedono esclusivamente sul computer locale dello studente.
+                  Rhesis è progettato seguendo il principio cardine della sovranità dei dati: tutti i dati dell'utente, inclusi il database SQLite (<code className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-xs font-mono text-zinc-800 dark:text-zinc-200">~/.config/rhesis/database.db</code>), le impostazioni e il codice di accesso personale (<code className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-xs font-mono text-zinc-800 dark:text-zinc-200">~/.config/rhesis/config.json</code>) e gli eventuali file audio conservati risiedono esclusivamente sul computer locale dello studente.
                 </p>
               </section>
 
@@ -146,10 +146,10 @@ export default function LegalModal({ isOpen, activeTab = 'termini', onClose }) {
 
               <section className="space-y-2">
                 <h4 className="font-semibold text-zinc-900 dark:text-zinc-100 text-base">
-                  3. Chiave API Google Gemini
+                  3. Codice di Accesso Personale Google Gemini
                 </h4>
                 <p>
-                  La chiave API personale di Google AI Studio fornita dallo studente è memorizzata esclusivamente nel file locale di configurazione. Le chiamate API per la trascrizione e la validazione avvengono in modo diretto tra il backend locale in esecuzione sul computer dell'utente e gli endpoint crittografati HTTPS di Google GenAI.
+                  Il codice di accesso personale (chiave API) di Google fornito dallo studente è memorizzato esclusivamente nel file locale di configurazione. Le chiamate per la trascrizione e la validazione avvengono in modo diretto tra il backend locale in esecuzione sul computer dell'utente e gli endpoint crittografati HTTPS di Google GenAI.
                 </p>
               </section>
 
@@ -167,7 +167,7 @@ export default function LegalModal({ isOpen, activeTab = 'termini', onClose }) {
                   5. Cancellazione Totale dei Dati
                 </h4>
                 <p>
-                  L'utente può eliminare le singole lezioni e il testo associato in qualsiasi momento dall'archivio laterale. Dalle Impostazioni è inoltre possibile revocare e rimuovere la chiave API ("Logout") con azzeramento immediato dei dati di autenticazione locali.
+                  L'utente può eliminare le singole lezioni e il testo associato in qualsiasi momento dall'archivio laterale. Dalle Impostazioni è inoltre possibile revocare e rimuovere il codice di accesso ("Scollega") con azzeramento immediato dei dati di autenticazione locali.
                 </p>
               </section>
             </>

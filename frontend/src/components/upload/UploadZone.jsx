@@ -18,6 +18,8 @@ export default function UploadZone({
   onSelectCourse = () => {},
   onCreateCourse = () => {},
   onOpenSettings = () => {},
+  apiKeyValid = true,
+  apiKeyStatus = 'valid',
 }) {
   const fileInputRef = useRef(null)
 
@@ -134,14 +136,32 @@ export default function UploadZone({
       )}
 
       {file && (status === 'idle' || status === 'error') && (
-        <div className="flex justify-center w-full animate-in fade-in zoom-in duration-300">
-          <button
-            type="button"
-            onClick={onTranscribe}
-            className="px-8 py-3.5 bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 text-base font-semibold rounded-full shadow-lg transition-all active:scale-95"
-          >
-            Trascrivi Lezione
-          </button>
+        <div className="flex flex-col items-center justify-center w-full animate-in fade-in zoom-in duration-300">
+          {!apiKeyValid && apiKeyStatus !== 'unreachable' ? (
+            <div className="w-full max-w-md p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0" />
+                <p className="text-xs font-medium text-amber-800/90 dark:text-amber-300/90 leading-relaxed">
+                  Per trascrivere è necessario attivare il tuo codice gratuito Google nelle Impostazioni.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 rounded-xl text-xs font-semibold whitespace-nowrap transition-colors shadow-xs shrink-0 self-center sm:self-auto"
+              >
+                Attiva Codice
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={onTranscribe}
+              className="px-8 py-3.5 bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 text-base font-semibold rounded-full shadow-lg transition-all active:scale-95"
+            >
+              Trascrivi Lezione
+            </button>
+          )}
         </div>
       )}
 
@@ -151,16 +171,23 @@ export default function UploadZone({
           <div className="flex-1">
             <h4 className="text-red-600 dark:text-red-400 font-medium">Ops, si è verificato un errore</h4>
             <p className="text-red-500/80 dark:text-red-400/80 text-sm mt-1">{errorMsg}</p>
-            {(errorMsg?.toLowerCase().includes('chiave') ||
-              errorMsg?.toLowerCase().includes('api') ||
-              errorMsg?.toLowerCase().includes('scaduta') ||
-              errorMsg?.includes('401')) && (
+            {!errorMsg?.toLowerCase().includes('offline') &&
+              !errorMsg?.toLowerCase().includes('connessione') &&
+              !errorMsg?.toLowerCase().includes('internet') &&
+              !errorMsg?.toLowerCase().includes('wi-fi') &&
+              !errorMsg?.toLowerCase().includes('rete') &&
+              (errorMsg?.toLowerCase().includes('chiave') ||
+                errorMsg?.toLowerCase().includes('api') ||
+                errorMsg?.toLowerCase().includes('scadut') ||
+                errorMsg?.toLowerCase().includes('codice') ||
+                errorMsg?.toLowerCase().includes('accesso') ||
+                errorMsg?.includes('401')) && (
               <button
                 type="button"
                 onClick={onOpenSettings}
                 className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 dark:text-red-300 bg-red-100/80 dark:bg-red-950/60 hover:bg-red-200 dark:hover:bg-red-900/60 rounded-lg transition-colors border border-red-200 dark:border-red-800/80"
               >
-                <span>Configura Chiave API nelle Impostazioni</span>
+                <span>Attiva il tuo codice gratuito nelle Impostazioni</span>
               </button>
             )}
           </div>

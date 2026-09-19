@@ -3,7 +3,7 @@ import { AlertTriangle, Mail, Copy, Check, X, Terminal, ChevronDown } from 'luci
 
 const ISSUE_CATEGORIES = [
   'Errore durante la trascrizione',
-  'Problema con la chiave API',
+  'Problema con il codice di accesso Google',
   'Problema con audio/player',
   'Altro'
 ]

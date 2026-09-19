@@ -16,7 +16,7 @@ export async function setupApiKey(apiKey) {
   })
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({}))
-    throw new Error(errorData.detail || 'Chiave non valida')
+    throw new Error(errorData.detail || 'Il codice inserito non sembra corretto o è incompleto. Assicurati di averlo copiato per intero e riprova.')
   }
   return res.json()
 }

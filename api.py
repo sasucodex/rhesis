@@ -279,13 +279,13 @@ def check_status():
 def setup_api_key(req: SetupRequest):
     key = req.api_key.strip() if req.api_key else ""
     if not key:
-        raise HTTPException(status_code=400, detail="La chiave API non può essere vuota")
+        raise HTTPException(status_code=400, detail="Il codice di accesso non può essere vuoto")
 
     is_valid, status = check_api_key_status(key, retry_on_unreachable=False)
     if status == "invalid":
-        raise HTTPException(status_code=400, detail="Chiave API Google non valida o revocata")
+        raise HTTPException(status_code=400, detail="Il codice inserito non sembra corretto o è incompleto. Assicurati di averlo copiato per intero e riprova.")
     if status == "unreachable":
-        raise HTTPException(status_code=400, detail="Impossibile verificare la chiave con Google: connessione internet assente o irraggiungibile.")
+        raise HTTPException(status_code=400, detail="Impossibile verificare il codice con Google: connessione internet assente o irraggiungibile.")
 
     save_api_key(key)
     return {"message": "Configurazione salvata con successo"}
@@ -294,7 +294,7 @@ def setup_api_key(req: SetupRequest):
 def delete_api_key():
     if os.path.exists(CONFIG_FILE):
         os.remove(CONFIG_FILE)
-    return {"message": "API Key rimossa con successo"}
+    return {"message": "Codice di accesso rimosso con successo"}
 import threading
 
 TASKS = {}
@@ -692,8 +692,32 @@ def process_transcription_core(
         return transcript_html
     except Exception as e:
         error_msg = str(e)
-        if any(kw in error_msg.lower() for kw in ['401', 'unauthenticated', 'api key not valid', 'api_key_invalid', 'permission_denied', 'consumer_invalid']):
-            error_msg = "Chiave API non valida o scaduta. Per avviare la trascrizione è necessario configurare una chiave API funzionante."
+        is_network_err = any(kw in error_msg.lower() for kw in [
+            'temporary failure in name resolution',
+            'name or service not known',
+            'nodename nor servname provided',
+            'getaddrinfo failed',
+            'failed to establish a new connection',
+            'network is unreachable',
+            'network unreachable',
+            'connection refused',
+            'errno -3',
+            'errno -2',
+            'errno 101',
+            'connecterror',
+            'connecttimeout',
+            'networkerror',
+            'socket.gaierror',
+            'connection error',
+            'connection reset',
+            'max retries exceeded with url',
+            'failed to resolve',
+            'no address associated with hostname'
+        ])
+        if is_network_err:
+            error_msg = "Connessione internet assente o non raggiungibile. Verifica la tua connessione Wi-Fi o di rete e riprova."
+        elif any(kw in error_msg.lower() for kw in ['401', 'unauthenticated', 'api key not valid', 'api_key_invalid', 'permission_denied', 'consumer_invalid']):
+            error_msg = "Codice di accesso non valido o scaduto. Per avviare la trascrizione è necessario configurare un codice personale funzionante nelle Impostazioni."
         elif '503' in error_msg or 'high demand' in error_msg.lower():
             error_msg = "I server di Google sono momentaneamente saturi (High Demand). Riprova tra qualche minuto."
 
@@ -746,7 +770,7 @@ def transcribe(
     cleanup_old_tasks()
     api_key = get_saved_api_key()
     if not api_key or len(api_key.strip()) < 10:
-        raise HTTPException(status_code=401, detail="Chiave API non configurata o scaduta. Configurala nelle Impostazioni.")
+        raise HTTPException(status_code=401, detail="Codice di accesso non configurato o scaduto. Configuralo nelle Impostazioni.")
     ext = os.path.splitext(file.filename)[1].lower() if file.filename else ""
     allowed_exts = {'.mp3', '.m4a', '.wav', '.ogg', '.flac', '.aac', '.mp4', '.webm', '.mpeg', '.mpga', '.amr'}
     if ext not in allowed_exts:

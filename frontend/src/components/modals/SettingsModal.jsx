@@ -38,6 +38,18 @@ export default function SettingsModal({
   const [tempEnableTimestamps, setTempEnableTimestamps] = useState(enableTimestamps)
   const [tempPreserveAudio, setTempPreserveAudio] = useState(preserveAudio)
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false)
+  const [isOffline, setIsOffline] = useState(() => typeof navigator !== 'undefined' && !navigator.onLine)
+
+  useEffect(() => {
+    const handleOnline = () => setIsOffline(false)
+    const handleOffline = () => setIsOffline(true)
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [])
 
   const hasUnsavedChanges = () => {
     return (
@@ -185,40 +197,40 @@ export default function SettingsModal({
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1.5">
                 <label className="block text-sm text-zinc-500 dark:text-zinc-400 font-medium">
-                  Stato Chiave API
+                  Connessione Google
                 </label>
                 <button
                   type="button"
-                  onClick={() => onOpenOnboarding && onOpenOnboarding(2)}
-                  title="Come ottenere una chiave API Google"
+                  onClick={() => onOpenOnboarding && onOpenOnboarding(1)}
+                  title="Come funziona l'accesso gratuito"
                   className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
                 >
                   <Info className="w-3.5 h-3.5" />
                 </button>
               </div>
-              {apiKeyValid ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                  Valida
-                </span>
-              ) : apiKeyStatus === 'unreachable' ? (
+              {isOffline || apiKeyStatus === 'unreachable' ? (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-                  Non verificata (Offline)
+                  Disconnessa (Offline)
+                </span>
+              ) : apiKeyValid ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                  Attiva e Verificata
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300 border border-red-200 dark:border-red-800">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 dark:text-red-950/50 dark:text-red-300 border border-red-200 dark:border-red-800">
                   <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
-                  Non valida o Scaduta
+                  Non collegata
                 </span>
               )}
             </div>
             <label className="block text-xs text-zinc-400 dark:text-zinc-500">
-              Modifica o sostituisci chiave
+              Aggiorna o sostituisci codice
             </label>
             <input
               type="password"
-              placeholder="Nuova API Key..."
+              placeholder="Nuovo codice personale..."
               value={apiKeyInput}
               disabled={isValidatingKey}
               onChange={(e) => {
@@ -360,11 +372,11 @@ export default function SettingsModal({
           <div className="pt-2 border-t border-zinc-200 dark:border-zinc-800 space-y-2">
             <button
               type="button"
-              onClick={onOpenOnboarding}
+              onClick={() => onOpenOnboarding && onOpenOnboarding(1)}
               className="w-full py-2.5 bg-zinc-50 hover:bg-zinc-100 dark:bg-zinc-950 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200 rounded-xl font-medium transition-colors text-xs flex items-center justify-center gap-2 border border-zinc-200 dark:border-zinc-800"
             >
               <BookOpen className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
-              <span>Rivedi guida iniziale</span>
+              <span>Come funziona l'accesso gratuito</span>
             </button>
             <button
               type="button"
@@ -372,7 +384,7 @@ export default function SettingsModal({
               className="w-full py-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-xl font-medium transition-colors text-xs flex items-center justify-center gap-2"
             >
               <LogOut className="w-4 h-4" />
-              <span>Scollega API Key (Logout)</span>
+              <span>Scollega Account Google (Esci)</span>
             </button>
           </div>
         </div>

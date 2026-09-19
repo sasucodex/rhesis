@@ -41,6 +41,7 @@ export default function OnboardingModal({
     })
   }, [])
 
+
   useEffect(() => {
     if (!isOpen || !canClose || !onClose) return
     const handleKeyDown = (e) => {
@@ -72,7 +73,7 @@ export default function OnboardingModal({
     if (e) e.preventDefault()
     const trimmed = apiKey.trim()
     if (!trimmed) {
-      setErrorMsg('Inserisci la chiave API prima di convalidare.')
+      setErrorMsg('Inserisci il tuo codice personale prima di convalidare.')
       return
     }
 
@@ -81,7 +82,7 @@ export default function OnboardingModal({
     try {
       await onComplete(trimmed)
     } catch (err) {
-      setErrorMsg(err.message || 'Chiave API non valida o revocata. Verifica e riprova.')
+      setErrorMsg(err.message || 'Il codice inserito non sembra corretto o è incompleto. Assicurati di averlo copiato per intero e riprova.')
     } finally {
       setIsValidating(false)
     }
@@ -105,7 +106,7 @@ export default function OnboardingModal({
             </div>
             <div>
               <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 text-sm">
-                Configurazione Iniziale
+                Attivazione Accesso Gratuito
               </h3>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
                 Passo {currentStep} di 6
@@ -154,7 +155,7 @@ export default function OnboardingModal({
                   Benvenuto in Rhesis
                 </h2>
                 <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-2 leading-relaxed">
-                  Rhesis è progettato per la trascrizione fedele e lo studio di lezioni universitarie utilizzando la tecnologia vocale di Google Gemini.
+                  Rhesis è progettato per la trascrizione fedele e lo studio di lezioni universitarie utilizzando la tecnologia vocale avanzata di Google Gemini.
                 </p>
               </div>
 
@@ -169,20 +170,20 @@ export default function OnboardingModal({
                 <div className="p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 space-y-2">
                   <div className="flex items-center gap-2 text-zinc-900 dark:text-zinc-100 font-semibold text-sm">
                     <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                    <span>Quota Gratuita Inclusa</span>
+                    <span>100% Gratuito, Zero Abbonamenti</span>
                   </div>
                   <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
-                    Google AI Studio offre un generoso piano gratuito per uso personale, sufficiente per trascrivere decine di ore di lezioni al mese a costo zero.
+                    Le app commerciali chiedono abbonamenti di 10–20€ al mese. Rhesis è gratuito per sempre: sfrutta la quota mensile che Google mette a disposizione per ogni account personale, senza alcuna carta di credito.
                   </p>
                 </div>
 
                 <div className="p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 space-y-2">
                   <div className="flex items-center gap-2 text-zinc-900 dark:text-zinc-100 font-semibold text-sm">
                     <Lock className="w-4 h-4 text-emerald-500" />
-                    <span>Sovranità e Sicurezza</span>
+                    <span>Sovranità e Privacy Locale</span>
                   </div>
                   <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
-                    La tua API Key e le tue registrazioni restano salvate esclusivamente sul tuo computer locale. Nessun server terzo ha accesso ai tuoi dati.
+                    Il tuo codice personale e le registrazioni audio rimangono salvati esclusivamente sul tuo computer. Nessun server terzo ha accesso alle tue lezioni.
                   </p>
                 </div>
               </div>
@@ -193,10 +194,10 @@ export default function OnboardingModal({
             <div className="space-y-4">
               <div>
                 <h4 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
-                  Accedi a Google AI Studio
+                  Accedi con il tuo Account Google
                 </h4>
                 <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 leading-relaxed">
-                  Apri il portale di Google AI Studio. Al primo accesso con il tuo account Google, spunta la casella per confermare e accettare i termini di servizio e le norme sulla privacy, quindi clicca su <strong>Continua</strong>.
+                  Apri la pagina ufficiale di Google. Al primo accesso con il tuo account, spunta la casella per accettare i termini di servizio e clicca su <strong>Continua</strong>.
                 </p>
               </div>
 
@@ -206,14 +207,14 @@ export default function OnboardingModal({
                 rel="noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:opacity-90 transition-opacity"
               >
-                <span>Apri Google AI Studio</span>
+                <span>Accedi a Google</span>
                 <ExternalLink className="w-3.5 h-3.5" />
               </a>
 
               <div className="w-full aspect-[16/9] max-h-[320px] rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-950 shadow-md flex items-center justify-center">
                 <img
                   src={step2Img}
-                  alt="Schermata termini e privacy Google AI Studio"
+                  alt="Schermata di conferma termini Google"
                   className="w-full h-full object-contain mx-auto"
                 />
               </div>
@@ -224,17 +225,17 @@ export default function OnboardingModal({
             <div className="space-y-4">
               <div>
                 <h4 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
-                  Crea una nuova Chiave API
+                  Genera il tuo Codice Personale
                 </h4>
                 <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 leading-relaxed">
-                  Nella sezione <strong>Chiavi API</strong>, individua il pulsante in alto a destra <strong>Crea chiave API</strong> e selezionalo per avviare la procedura.
+                  Nella schermata di Google, individua il pulsante in alto a destra <strong>Crea chiave</strong> (Create API key) e cliccaci sopra per avviare la procedura.
                 </p>
               </div>
 
               <div className="w-full aspect-[16/9] max-h-[320px] rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-950 shadow-md flex items-center justify-center">
                 <img
                   src={step3Img}
-                  alt="Pulsante Crea chiave API"
+                  alt="Pulsante Crea chiave Google"
                   className="w-full h-full object-contain mx-auto"
                 />
               </div>
@@ -245,17 +246,17 @@ export default function OnboardingModal({
             <div className="space-y-4">
               <div>
                 <h4 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
-                  Conferma e Genera il Token
+                  Conferma la Creazione
                 </h4>
                 <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 leading-relaxed">
-                  Nella finestra che appare puoi lasciare il progetto predefinito (o assegnare un nome a piacere). Clicca sul pulsante <strong>Crea chiave</strong> in basso a destra.
+                  Non serve toccare alcuna impostazione: lascia il progetto predefinito e clicca semplicemente su <strong>Crea</strong> in basso a destra nella finestra di dialogo.
                 </p>
               </div>
 
               <div className="w-full aspect-[16/9] max-h-[320px] rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-950 shadow-md flex items-center justify-center">
                 <img
                   src={step4Img}
-                  alt="Finestra di creazione chiave e conferma progetto"
+                  alt="Finestra di conferma creazione codice"
                   className="w-full h-full object-contain mx-auto"
                 />
               </div>
@@ -266,17 +267,17 @@ export default function OnboardingModal({
             <div className="space-y-4">
               <div>
                 <h4 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
-                  Copia la Chiave Generata
+                  Copia il Codice Generato
                 </h4>
                 <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 leading-relaxed">
-                  La tua chiave è pronta. Clicca sul pulsante <strong>Copia chiave</strong> in basso a destra per copiarla negli appunti del tuo sistema operativo.
+                  Il tuo codice personale è pronto. Clicca sul pulsante <strong>Copia</strong> in basso a destra: il codice verrà memorizzato negli appunti del tuo computer.
                 </p>
               </div>
 
               <div className="w-full aspect-[16/9] max-h-[320px] rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-950 shadow-md flex items-center justify-center">
                 <img
                   src={step5Img}
-                  alt="Dettagli della chiave API con pulsante copia"
+                  alt="Dettagli del codice con pulsante Copia"
                   className="w-full h-full object-contain mx-auto"
                 />
               </div>
@@ -290,10 +291,10 @@ export default function OnboardingModal({
               </div>
               <div>
                 <h2 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-                  Collega la tua API Key
+                  Attiva il tuo Accesso Gratuito
                 </h2>
                 <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1.5 leading-relaxed">
-                  Incolla la chiave copiata per iniziare a usare Rhesis. Verificheremo subito la connessione ai server di Google Gemini.
+                  Incolla qui il tuo codice personale per iniziare a usare Rhesis. Verificheremo subito il collegamento con Google.
                 </p>
               </div>
 
@@ -306,7 +307,7 @@ export default function OnboardingModal({
 
               <div className="space-y-2">
                 <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Chiave API Google AI Studio
+                  Codice di Accesso Personale Google
                 </label>
                 <div className="relative">
                   <input
@@ -317,7 +318,7 @@ export default function OnboardingModal({
                       setApiKey(e.target.value)
                       if (errorMsg) setErrorMsg('')
                     }}
-                    placeholder="AIzaSy..."
+                    placeholder="Incolla qui il tuo codice personale..."
                     className="w-full bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-2xl pl-4 pr-11 py-3 text-sm text-zinc-900 dark:text-white focus:outline-none focus:border-zinc-900 dark:focus:border-zinc-100 focus:ring-1 focus:ring-zinc-900 dark:focus:ring-zinc-100 disabled:opacity-50 font-mono tracking-wider"
                     autoFocus
                   />
@@ -325,7 +326,7 @@ export default function OnboardingModal({
                     type="button"
                     onClick={() => setShowKey(prev => !prev)}
                     className="absolute right-3.5 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors"
-                    title={showKey ? 'Nascondi chiave' : 'Mostra chiave'}
+                    title={showKey ? 'Nascondi codice' : 'Mostra codice'}
                   >
                     {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -335,7 +336,7 @@ export default function OnboardingModal({
               <div className="p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 flex items-center gap-3">
                 <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  La chiave viene validata in tempo reale e salvata solo in locale in <code className="text-zinc-700 dark:text-zinc-300 font-mono">~/.config/rhesis/config.json</code>.
+                  Il codice viene verificato in tempo reale e salvato solo in locale in <code className="text-zinc-700 dark:text-zinc-300 font-mono">~/.config/rhesis/config.json</code>.
                 </p>
               </div>
 
@@ -347,10 +348,10 @@ export default function OnboardingModal({
                 {isValidating ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Verifica connessione a Google AI...</span>
+                    <span>Verifica collegamento con Google in corso...</span>
                   </>
                 ) : (
-                  <span>Convalida e Inizia ad Usare Rhesis</span>
+                  <span>Verifica e Attiva Rhesis</span>
                 )}
               </button>
             </form>
