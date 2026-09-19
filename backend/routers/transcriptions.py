@@ -26,7 +26,16 @@ UPLOAD_DIR = os.path.join(CONFIG_DIR, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 TASKS = {}
-tasks_lock = threading.Lock()
+tasks_lock = threading.RLock()
+
+TASK_QUEUE = []
+TASK_CONTROLS = {}
+ACTIVE_TASK_ID = None
+queue_lock = threading.RLock()
+queue_condition = threading.Condition(queue_lock)
+
+worker_thread = None
+worker_thread_lock = threading.Lock()
 
 class TranscriptionResponse(BaseModel):
     id: int
@@ -156,44 +165,122 @@ def update_task(task_id: str, status: str, progress: int, message: str, result=N
 def cleanup_old_tasks():
     with tasks_lock:
         now = time.time()
-        expired = [tid for tid, t in TASKS.items() if now - t.get("created_at", now) > 7200]
+        expired = [
+            tid for tid, t in TASKS.items()
+            if t.get("status") in ("completed", "cancelled", "error")
+            and now - t.get("created_at", now) > 7200
+        ]
         for tid in expired:
             del TASKS[tid]
+            TASK_CONTROLS.pop(tid, None)
 
-def process_transcription_core(
-    api_key: str,
-    file_path: str,
-    record_id: int,
-    enable_chapters: bool = False,
-    enable_timestamps: bool = False,
-    preserve_audio: bool = False,
-    task_id: Optional[str] = None
+def sanitize_stale_records():
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT id, file_path, audio_preserved FROM transcriptions WHERE status IN ('processing', 'queued', 'uploading')")
+            rows = c.fetchall()
+            for row in rows:
+                fpath = row["file_path"]
+                preserved = bool(row["audio_preserved"])
+                if not preserved and fpath and os.path.exists(fpath):
+                    try:
+                        os.remove(fpath)
+                    except OSError:
+                        pass
+            c.execute("DELETE FROM transcriptions WHERE status IN ('processing', 'queued', 'uploading')")
+            conn.commit()
+    except Exception:
+        pass
+
+def _cleanup_cancelled_task(
+    task_id: str,
+    record_id: Optional[int],
+    file_path: Optional[str],
+    preserve_audio: bool,
+    google_file_name: Optional[str],
+    client: Optional[genai.Client]
 ):
+    if google_file_name and client:
+        try:
+            client.files.delete(name=google_file_name)
+        except Exception:
+            pass
+
+    if record_id:
+        try:
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("DELETE FROM transcriptions WHERE id = ?", (record_id,))
+                conn.commit()
+        except Exception:
+            pass
+
+    if not preserve_audio and file_path and os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
+
+    update_task(task_id, "cancelled", 0, "Trascrizione annullata dall'utente.")
+
+def process_transcription_core(task_id: str):
+    with tasks_lock:
+        ctrl = TASK_CONTROLS.get(task_id)
+    if not ctrl:
+        return None
+
+    api_key = ctrl["api_key"]
+    file_path = ctrl["file_path"]
+    record_id = ctrl["record_id"]
+    enable_chapters = ctrl.get("enable_chapters", False)
+    enable_timestamps = ctrl.get("enable_timestamps", False)
+    preserve_audio = ctrl.get("preserve_audio", False)
+    cancel_event = ctrl["cancel_event"]
+
+    if cancel_event.is_set():
+        _cleanup_cancelled_task(task_id, record_id, file_path, preserve_audio, None, None)
+        return None
+
     uploaded_file = None
     client = None
+
     try:
         client = genai.Client(api_key=api_key)
-        if task_id:
-            update_task(task_id, "upload_google", 35, "Caricamento audio su Google AI Studio in corso...")
-        uploaded_file = client.files.upload(file=file_path)
+        ctrl["client"] = client
 
-        if task_id:
-            update_task(task_id, "processing_google", 55, "I server Google stanno elaborando il file audio...")
+        if cancel_event.is_set():
+            _cleanup_cancelled_task(task_id, record_id, file_path, preserve_audio, None, client)
+            return None
+
+        update_task(task_id, "upload_google", 35, "Caricamento audio su Google AI Studio in corso...")
+        uploaded_file = client.files.upload(file=file_path)
+        ctrl["google_file_name"] = uploaded_file.name
+
+        if cancel_event.is_set():
+            _cleanup_cancelled_task(task_id, record_id, file_path, preserve_audio, uploaded_file.name, client)
+            return None
+
+        update_task(task_id, "processing_google", 55, "I server Google stanno elaborando il file audio...")
         file_info = client.files.get(name=uploaded_file.name)
         poll_count = 0
         while file_info.state.name == 'PROCESSING':
-            time.sleep(2)
+            if cancel_event.wait(timeout=2):
+                _cleanup_cancelled_task(task_id, record_id, file_path, preserve_audio, uploaded_file.name, client)
+                return None
             poll_count += 1
-            if task_id:
-                prog = min(55 + poll_count * 2, 70)
-                update_task(task_id, "processing_google", prog, "I server Google stanno elaborando il file audio...")
+            prog = min(55 + poll_count * 2, 70)
+            update_task(task_id, "processing_google", prog, "I server Google stanno elaborando il file audio...")
             file_info = client.files.get(name=uploaded_file.name)
 
         if file_info.state.name == 'FAILED':
             raise Exception("Google backend failed processing audio.")
 
-        if task_id:
-            update_task(task_id, "gemini_generating", 75, "Trascrizione in corso con Gemini...")
+        if cancel_event.is_set():
+            _cleanup_cancelled_task(task_id, record_id, file_path, preserve_audio, uploaded_file.name, client)
+            return None
+
+        update_task(task_id, "gemini_generating", 75, "Trascrizione in corso con Gemini...")
 
         system_instruction = (
             "Sei un trascrittore professionale e accademico. Il tuo compito è produrre una trascrizione testuale PAROLA PER PAROLA (verbatim) dell'audio fornito. "
@@ -224,9 +311,12 @@ def process_transcription_core(
         max_retries = 3
         response = None
         for attempt in range(max_retries):
+            if cancel_event.is_set():
+                _cleanup_cancelled_task(task_id, record_id, file_path, preserve_audio, uploaded_file.name, client)
+                return None
             reconnect_timer = None
             try:
-                if attempt > 0 and task_id:
+                if attempt > 0:
                     update_task(
                         task_id,
                         "gemini_generating",
@@ -251,32 +341,46 @@ def process_transcription_core(
                 )
                 break
             except Exception as gen_err:
+                if cancel_event.is_set():
+                    _cleanup_cancelled_task(task_id, record_id, file_path, preserve_audio, uploaded_file.name, client)
+                    return None
                 err_str = str(gen_err)
                 if ('503' in err_str or 'high demand' in err_str.lower() or 'unavailable' in err_str.lower()) and attempt < max_retries - 1:
                     backoff = (2 ** attempt) * 2
                     for rem in range(backoff, 0, -1):
-                        if task_id:
-                            update_task(
-                                task_id,
-                                "gemini_generating",
-                                75,
-                                f"Server Google occupati, nuovo tentativo tra {rem}s..."
-                            )
-                        time.sleep(1)
+                        if cancel_event.wait(timeout=1):
+                            _cleanup_cancelled_task(task_id, record_id, file_path, preserve_audio, uploaded_file.name, client)
+                            return None
+                        update_task(
+                            task_id,
+                            "gemini_generating",
+                            75,
+                            f"Server Google occupati, nuovo tentativo tra {rem}s..."
+                        )
                 else:
                     raise gen_err
             finally:
                 if reconnect_timer:
                     reconnect_timer.cancel()
 
+        if cancel_event.is_set():
+            _cleanup_cancelled_task(task_id, record_id, file_path, preserve_audio, uploaded_file.name, client)
+            return None
+
         raw_text = response.text
         cleaned_text = clean_transcription_markdown(raw_text)
         transcript_html = normalize_transcript_html(markdown.markdown(cleaned_text))
+
         if uploaded_file:
             try:
                 client.files.delete(name=uploaded_file.name)
+                ctrl["google_file_name"] = None
             except Exception:
                 pass
+
+        if cancel_event.is_set():
+            _cleanup_cancelled_task(task_id, record_id, file_path, preserve_audio, None, client)
+            return None
 
         with get_db_connection() as conn:
             c = conn.cursor()
@@ -289,21 +393,25 @@ def process_transcription_core(
             except Exception:
                 pass
 
-        if task_id:
-            update_task(
-                task_id,
-                "completed",
-                100,
-                "Trascrizione completata con successo!",
-                result={
-                    "id": record_id,
-                    "transcript": transcript_html,
-                    "status": "success",
-                    "audio_preserved": preserve_audio
-                }
-            )
+        update_task(
+            task_id,
+            "completed",
+            100,
+            "Trascrizione completata con successo!",
+            result={
+                "id": record_id,
+                "transcript": transcript_html,
+                "status": "success",
+                "audio_preserved": preserve_audio
+            }
+        )
         return transcript_html
+
     except Exception as e:
+        if cancel_event.is_set():
+            _cleanup_cancelled_task(task_id, record_id, file_path, preserve_audio, ctrl.get("google_file_name"), client)
+            return None
+
         error_msg = str(e)
         is_network_err = any(kw in error_msg.lower() for kw in [
             'temporary failure in name resolution',
@@ -334,9 +442,10 @@ def process_transcription_core(
         elif '503' in error_msg or 'high demand' in error_msg.lower():
             error_msg = "I server di Google sono momentaneamente saturi (High Demand). Riprova tra qualche minuto."
 
-        if uploaded_file and client:
+        if ctrl.get("google_file_name") and client:
             try:
-                client.files.delete(name=uploaded_file.name)
+                client.files.delete(name=ctrl["google_file_name"])
+                ctrl["google_file_name"] = None
             except Exception:
                 pass
 
@@ -351,24 +460,65 @@ def process_transcription_core(
             except Exception:
                 pass
 
-        if task_id:
-            update_task(task_id, "error", 0, error_msg, error=error_msg)
+        update_task(task_id, "error", 0, error_msg, error=error_msg)
+        return None
 
-        raise Exception(error_msg)
+def queue_worker_loop():
+    global ACTIVE_TASK_ID
+    while True:
+        with queue_condition:
+            while not TASK_QUEUE:
+                ACTIVE_TASK_ID = None
+                queue_condition.wait()
+            next_task_id = TASK_QUEUE.pop(0)
+            ACTIVE_TASK_ID = next_task_id
 
-def transcription_worker(task_id: str, api_key: str, file_path: str, record_id: int, enable_chapters: bool, enable_timestamps: bool, preserve_audio: bool):
-    try:
-        process_transcription_core(
-            api_key=api_key,
-            file_path=file_path,
-            record_id=record_id,
-            enable_chapters=enable_chapters,
-            enable_timestamps=enable_timestamps,
-            preserve_audio=preserve_audio,
-            task_id=task_id
+        with tasks_lock:
+            task_info = TASKS.get(next_task_id)
+            ctrl = TASK_CONTROLS.get(next_task_id)
+
+        if not task_info or not ctrl:
+            with queue_condition:
+                if ACTIVE_TASK_ID == next_task_id:
+                    ACTIVE_TASK_ID = None
+            continue
+
+        if ctrl["cancel_event"].is_set() or task_info.get("status") == "cancelled":
+            with queue_condition:
+                if ACTIVE_TASK_ID == next_task_id:
+                    ACTIVE_TASK_ID = None
+            continue
+
+        try:
+            with get_db_connection() as conn:
+                c = conn.cursor()
+                c.execute("UPDATE transcriptions SET status = 'processing' WHERE id = ?", (ctrl["record_id"],))
+                conn.commit()
+        except Exception:
+            pass
+
+        update_task(
+            next_task_id,
+            "upload_local",
+            15,
+            "File audio salvato in locale. Inizializzazione pipeline..."
         )
-    except Exception:
-        pass
+
+        try:
+            process_transcription_core(next_task_id)
+        except Exception:
+            pass
+        finally:
+            with queue_condition:
+                if ACTIVE_TASK_ID == next_task_id:
+                    ACTIVE_TASK_ID = None
+
+def ensure_worker_started():
+    global worker_thread
+    with worker_thread_lock:
+        if worker_thread is None or not worker_thread.is_alive():
+            worker_thread = threading.Thread(target=queue_worker_loop, daemon=True, name="RhesisTranscriptionWorker")
+            worker_thread.start()
 
 @router.get("/history")
 def get_history(course_id: Optional[int] = None):
@@ -456,6 +606,28 @@ def search_transcriptions(q: str = ""):
         result.append(item)
     return result
 
+@router.get("/queue")
+def get_queue():
+    cleanup_old_tasks()
+    with queue_lock:
+        active = None
+        if ACTIVE_TASK_ID:
+            with tasks_lock:
+                active_t = TASKS.get(ACTIVE_TASK_ID)
+                if active_t and active_t.get("status") not in ("completed", "cancelled", "error"):
+                    active = dict(active_t)
+
+        queue_items = []
+        for tid in TASK_QUEUE:
+            with tasks_lock:
+                if tid in TASKS:
+                    queue_items.append(dict(TASKS[tid]))
+
+        return {
+            "active_task": active,
+            "queue": queue_items
+        }
+
 @router.post("/transcribe/")
 @router.post("/transcribe", include_in_schema=False)
 def transcribe(
@@ -479,53 +651,84 @@ def transcribe(
     file_path = os.path.join(UPLOAD_DIR, safe_filename)
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    with get_db_connection() as conn:
-        c = conn.cursor()
 
-        course_id_val = None
-        if course_id is not None and course_id > 0:
-            course_id_val = course_id
-            c.execute("SELECT name, professor_name FROM courses WHERE id = ?", (course_id_val,))
+    course_id_val = None
+    course_color = None
+    if course_id is not None and course_id > 0:
+        course_id_val = course_id
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT name, professor_name, color FROM courses WHERE id = ?", (course_id_val,))
             c_row = c.fetchone()
             if c_row:
                 if not course_name:
                     course_name = c_row[0]
                 if not professor_name and c_row[1]:
                     professor_name = c_row[1]
+                course_color = c_row[2]
 
-        c.execute(
-            "INSERT INTO transcriptions (filename, file_path, status, audio_preserved, course_name, professor_name, course_id) VALUES (?, ?, 'processing', ?, ?, ?, ?)",
-            (file.filename, file_path, 1 if preserve_audio else 0, course_name, professor_name, course_id_val)
-        )
-        record_id = c.lastrowid
-        conn.commit()
+    with queue_lock:
+        active_task_running = False
+        if ACTIVE_TASK_ID:
+            with tasks_lock:
+                active_t = TASKS.get(ACTIVE_TASK_ID)
+                if active_t and active_t.get("status") not in ("completed", "cancelled", "error"):
+                    active_task_running = True
+        is_busy = active_task_running or (len(TASK_QUEUE) > 0)
+        initial_status = "queued" if is_busy else "upload_local"
+        db_status = "queued" if is_busy else "processing"
+        initial_progress = 5 if is_busy else 15
+        initial_message = "In coda di attesa..." if is_busy else "File audio salvato in locale. Inizializzazione pipeline..."
 
-    task_id = uuid.uuid4().hex
-    with tasks_lock:
-        TASKS[task_id] = {
-            "task_id": task_id,
-            "record_id": record_id,
-            "status": "upload_local",
-            "progress": 15,
-            "message": "File audio salvato in locale. Inizializzazione pipeline...",
-            "result": None,
-            "error": None,
-            "created_at": time.time(),
-            "updated_at": time.time()
-        }
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute(
+                "INSERT INTO transcriptions (filename, file_path, status, audio_preserved, course_name, professor_name, course_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (file.filename, file_path, db_status, 1 if preserve_audio else 0, course_name, professor_name, course_id_val)
+            )
+            record_id = c.lastrowid
+            conn.commit()
 
-    worker = threading.Thread(
-        target=transcription_worker,
-        args=(task_id, api_key, file_path, record_id, enable_chapters, enable_timestamps, preserve_audio),
-        daemon=True
-    )
-    worker.start()
+        task_id = uuid.uuid4().hex
+        with tasks_lock:
+            TASKS[task_id] = {
+                "task_id": task_id,
+                "record_id": record_id,
+                "filename": file.filename,
+                "course_id": course_id_val,
+                "course_name": course_name,
+                "professor_name": professor_name,
+                "course_color": course_color,
+                "status": initial_status,
+                "progress": initial_progress,
+                "message": initial_message,
+                "result": None,
+                "error": None,
+                "created_at": time.time(),
+                "updated_at": time.time()
+            }
+            TASK_CONTROLS[task_id] = {
+                "task_id": task_id,
+                "record_id": record_id,
+                "file_path": file_path,
+                "api_key": api_key,
+                "enable_chapters": enable_chapters,
+                "enable_timestamps": enable_timestamps,
+                "preserve_audio": preserve_audio,
+                "cancel_event": threading.Event(),
+                "google_file_name": None,
+                "client": None
+            }
+            TASK_QUEUE.append(task_id)
+            queue_condition.notify()
+
+    ensure_worker_started()
 
     return {
         "task_id": task_id,
         "id": record_id,
         "record_id": record_id,
-        "status": "upload_local"
+        "status": initial_status
     }
 
 @router.get("/task/{task_id}")
@@ -535,6 +738,62 @@ def get_task_status(task_id: str):
         if not task:
             raise HTTPException(status_code=404, detail="Task non trovato")
         return dict(task)
+
+@router.post("/task/{task_id}/cancel")
+def cancel_task(task_id: str):
+    with queue_lock:
+        with tasks_lock:
+            task = TASKS.get(task_id)
+            if not task:
+                raise HTTPException(status_code=404, detail="Task non trovato")
+
+            current_status = task.get("status")
+            if current_status in ("completed", "cancelled", "error"):
+                return {
+                    "task_id": task_id,
+                    "status": current_status,
+                    "message": f"Il task è già nello stato '{current_status}'."
+                }
+
+            ctrl = TASK_CONTROLS.get(task_id, {})
+            cancel_event = ctrl.get("cancel_event")
+            if cancel_event:
+                cancel_event.set()
+
+            is_queued = task_id in TASK_QUEUE
+            if is_queued:
+                TASK_QUEUE.remove(task_id)
+
+            record_id = task.get("record_id")
+            file_path = ctrl.get("file_path")
+            preserve_audio = ctrl.get("preserve_audio", False) if not is_queued else False
+            google_file_name = ctrl.get("google_file_name") if not is_queued else None
+            client = ctrl.get("client") if not is_queued else None
+            api_key = ctrl.get("api_key") if not is_queued else None
+            if not is_queued:
+                ctrl["google_file_name"] = None
+
+    if not is_queued and not client and api_key:
+        try:
+            client = genai.Client(api_key=api_key)
+        except Exception:
+            client = None
+
+    _cleanup_cancelled_task(
+        task_id=task_id,
+        record_id=record_id,
+        file_path=file_path,
+        preserve_audio=preserve_audio,
+        google_file_name=google_file_name,
+        client=client
+    )
+
+    msg = "Trascrizione rimossa dalla coda e annullata con successo." if is_queued else "Trascrizione annullata con successo."
+    return {
+        "task_id": task_id,
+        "status": "cancelled",
+        "message": msg
+    }
 
 @router.get("/audio/{record_id}")
 @router.head("/audio/{record_id}", include_in_schema=False)
@@ -629,3 +888,7 @@ def delete_transcript(record_id: int):
         c.execute("DELETE FROM transcriptions WHERE id = ?", (record_id,))
         conn.commit()
     return {"message": "Success"}
+
+sanitize_stale_records()
+ensure_worker_started()
+

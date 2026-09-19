@@ -17,7 +17,7 @@ try:
         generate_pdf,
     )
     from backend.routers.courses import router as courses_router
-    from backend.routers.transcriptions import router as transcriptions_router
+    from backend.routers.transcriptions import router as transcriptions_router, sanitize_stale_records
 except ImportError:
     from database import init_db
     from services.auth_service import (
@@ -32,7 +32,7 @@ except ImportError:
         generate_pdf,
     )
     from routers.courses import router as courses_router
-    from routers.transcriptions import router as transcriptions_router
+    from routers.transcriptions import router as transcriptions_router, sanitize_stale_records
 
 app = FastAPI(title="Rhesis Transcription Server")
 app.add_middleware(
@@ -44,6 +44,7 @@ app.add_middleware(
 )
 
 init_db()
+sanitize_stale_records()
 
 app.include_router(courses_router)
 app.include_router(transcriptions_router)
