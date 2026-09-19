@@ -19,7 +19,7 @@ const AudioPlayerSync = forwardRef(function AudioPlayerSync(
 ) {
   const audioRef = useRef(null)
   const speedMenuRef = useRef(null)
-  const lastProcessedSeekIdRef = useRef(null)
+  const lastProcessedSeekIdRef = useRef(seekRequest?.id ?? null)
 
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
@@ -71,7 +71,7 @@ const AudioPlayerSync = forwardRef(function AudioPlayerSync(
 
   const togglePlay = () => {
     if (!audioRef.current) return
-    if (isPlaying) {
+    if (!audioRef.current.paused) {
       audioRef.current.pause()
     } else {
       audioRef.current.play().catch(() => {})
