@@ -12,8 +12,6 @@ from google.genai import types, errors
 import httpx
 import json
 import tempfile
-import sqlite3
-from datetime import datetime
 from docx import Document
 from docx.shared import Pt, RGBColor, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -26,6 +24,11 @@ from htmldocx import HtmlToDocx
 from xhtml2pdf import pisa
 import mimetypes
 
+try:
+    from backend.database import get_db_connection, init_db
+except ImportError:
+    from database import get_db_connection, init_db
+
 app = FastAPI(title="Rhesis Transcription Server")
 app.add_middleware(
     CORSMiddleware,
@@ -36,7 +39,6 @@ app.add_middleware(
 )
 CONFIG_DIR = os.path.expanduser("~/.config/rhesis")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-DB_FILE = os.path.join(CONFIG_DIR, "database.db")
 UPLOAD_DIR = os.path.join(CONFIG_DIR, "uploads")
 os.makedirs(CONFIG_DIR, exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -111,69 +113,6 @@ def normalize_transcript_html(html: str) -> str:
 
     html = re.sub(r'<h2>(.*?)</h2>', strip_ts_from_h2, html, flags=re.DOTALL)
     return html
-
-def strip_html_for_fts(html_text: str) -> str:
-    if not html_text:
-        return ""
-    text = re.sub(r"<(?:p|h\d|div|br|li|tr|blockquote)[^>]*>", " ", html_text, flags=re.IGNORECASE)
-    text = re.sub(r"<[^>]+>", "", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS courses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            color TEXT NOT NULL DEFAULT '#2563eb',
-            professor_name TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS transcriptions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            transcript TEXT,
-            status TEXT NOT NULL,
-            audio_preserved BOOLEAN DEFAULT 0,
-            course_id INTEGER REFERENCES courses(id) ON DELETE SET NULL,
-            course_name TEXT,
-            professor_name TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    c.execute("PRAGMA table_info(transcriptions)")
-    columns = [row[1] for row in c.fetchall()]
-    if "audio_preserved" not in columns:
-        c.execute("ALTER TABLE transcriptions ADD COLUMN audio_preserved BOOLEAN DEFAULT 0")
-    if "course_id" not in columns:
-        c.execute("ALTER TABLE transcriptions ADD COLUMN course_id INTEGER REFERENCES courses(id) ON DELETE SET NULL")
-    if "course_name" not in columns:
-        c.execute("ALTER TABLE transcriptions ADD COLUMN course_name TEXT")
-    if "professor_name" not in columns:
-        c.execute("ALTER TABLE transcriptions ADD COLUMN professor_name TEXT")
-
-    c.execute("DROP TRIGGER IF EXISTS transcriptions_ai")
-    c.execute("DROP TRIGGER IF EXISTS transcriptions_ad")
-    c.execute("DROP TRIGGER IF EXISTS transcriptions_au")
-    c.execute("DROP TABLE IF EXISTS transcriptions_fts")
-    c.execute('''
-        CREATE VIRTUAL TABLE IF NOT EXISTS transcriptions_fts USING fts5(
-            filename,
-            content
-        )
-    ''')
-    c.execute("SELECT id, filename, transcript FROM transcriptions WHERE status = 'success'")
-    for row in c.fetchall():
-        rid, fn, tr = row[0], row[1], row[2]
-        clean_text = strip_html_for_fts(tr)
-        c.execute("INSERT INTO transcriptions_fts(rowid, filename, content) VALUES (?, ?, ?)", (rid, fn, clean_text))
-
-    conn.commit()
-    conn.close()
 
 init_db()
 def get_saved_api_key():
@@ -325,20 +264,18 @@ def cleanup_old_tasks():
 
 @app.get("/courses")
 def get_courses():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("""
-        SELECT c.id, c.name, c.color, c.professor_name, c.created_at,
-               COUNT(t.id) as transcriptions_count
-        FROM courses c
-        LEFT JOIN transcriptions t ON t.course_id = c.id AND t.status = 'success'
-        GROUP BY c.id
-        ORDER BY c.name COLLATE NOCASE ASC
-    """)
-    rows = c.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT c.id, c.name, c.color, c.professor_name, c.created_at,
+                   COUNT(t.id) as transcriptions_count
+            FROM courses c
+            LEFT JOIN transcriptions t ON t.course_id = c.id AND t.status = 'success'
+            GROUP BY c.id
+            ORDER BY c.name COLLATE NOCASE ASC
+        """)
+        rows = c.fetchall()
+        return [dict(r) for r in rows]
 
 @app.post("/courses")
 def create_course(req: CourseCreateRequest):
@@ -347,107 +284,96 @@ def create_course(req: CourseCreateRequest):
         raise HTTPException(status_code=400, detail="Il nome del corso è obbligatorio.")
     color = req.color.strip() if req.color else "#2563eb"
     prof = req.professor_name.strip() if req.professor_name else None
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("SELECT id FROM courses WHERE LOWER(name) = LOWER(?)", (name,))
-    if c.fetchone():
-        conn.close()
-        raise HTTPException(status_code=400, detail="Un corso con questo nome esiste già.")
-    c.execute(
-        "INSERT INTO courses (name, color, professor_name) VALUES (?, ?, ?)",
-        (name, color, prof)
-    )
-    course_id = c.lastrowid
-    conn.commit()
-    conn.close()
-    return {
-        "id": course_id,
-        "name": name,
-        "color": color,
-        "professor_name": prof,
-        "transcriptions_count": 0
-    }
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id FROM courses WHERE LOWER(name) = LOWER(?)", (name,))
+        if c.fetchone():
+            raise HTTPException(status_code=400, detail="Un corso con questo nome esiste già.")
+        c.execute(
+            "INSERT INTO courses (name, color, professor_name) VALUES (?, ?, ?)",
+            (name, color, prof)
+        )
+        course_id = c.lastrowid
+        conn.commit()
+        return {
+            "id": course_id,
+            "name": name,
+            "color": color,
+            "professor_name": prof,
+            "transcriptions_count": 0
+        }
 
 @app.put("/courses/{course_id}")
 def update_course(course_id: int, req: CourseUpdateRequest):
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("SELECT id, name, color, professor_name FROM courses WHERE id = ?", (course_id,))
-    course = c.fetchone()
-    if not course:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Corso non trovato.")
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, name, color, professor_name FROM courses WHERE id = ?", (course_id,))
+        course = c.fetchone()
+        if not course:
+            raise HTTPException(status_code=404, detail="Corso non trovato.")
 
-    new_name = req.name.strip() if req.name is not None else course["name"]
-    if not new_name:
-        conn.close()
-        raise HTTPException(status_code=400, detail="Il nome del corso non può essere vuoto.")
+        new_name = req.name.strip() if req.name is not None else course["name"]
+        if not new_name:
+            raise HTTPException(status_code=400, detail="Il nome del corso non può essere vuoto.")
 
-    if new_name.lower() != course["name"].lower():
-        c.execute("SELECT id FROM courses WHERE LOWER(name) = LOWER(?) AND id != ?", (new_name, course_id))
-        if c.fetchone():
-            conn.close()
-            raise HTTPException(status_code=400, detail="Un altro corso con questo nome esiste già.")
+        if new_name.lower() != course["name"].lower():
+            c.execute("SELECT id FROM courses WHERE LOWER(name) = LOWER(?) AND id != ?", (new_name, course_id))
+            if c.fetchone():
+                raise HTTPException(status_code=400, detail="Un altro corso con questo nome esiste già.")
 
-    new_color = req.color.strip() if req.color is not None else course["color"]
-    new_prof = req.professor_name.strip() if req.professor_name is not None else course["professor_name"]
-    if new_prof == "":
-        new_prof = None
+        new_color = req.color.strip() if req.color is not None else course["color"]
+        new_prof = req.professor_name.strip() if req.professor_name is not None else course["professor_name"]
+        if new_prof == "":
+            new_prof = None
 
-    c.execute(
-        "UPDATE courses SET name = ?, color = ?, professor_name = ? WHERE id = ?",
-        (new_name, new_color, new_prof, course_id)
-    )
-    c.execute("UPDATE transcriptions SET course_name = ? WHERE course_id = ?", (new_name, course_id))
-    conn.commit()
+        c.execute(
+            "UPDATE courses SET name = ?, color = ?, professor_name = ? WHERE id = ?",
+            (new_name, new_color, new_prof, course_id)
+        )
+        c.execute("UPDATE transcriptions SET course_name = ? WHERE course_id = ?", (new_name, course_id))
+        conn.commit()
 
-    c.execute("""
-        SELECT c.id, c.name, c.color, c.professor_name, c.created_at,
-               COUNT(t.id) as transcriptions_count
-        FROM courses c
-        LEFT JOIN transcriptions t ON t.course_id = c.id AND t.status = 'success'
-        WHERE c.id = ?
-        GROUP BY c.id
-    """, (course_id,))
-    updated = c.fetchone()
-    conn.close()
-    return dict(updated)
+        c.execute("""
+            SELECT c.id, c.name, c.color, c.professor_name, c.created_at,
+                   COUNT(t.id) as transcriptions_count
+            FROM courses c
+            LEFT JOIN transcriptions t ON t.course_id = c.id AND t.status = 'success'
+            WHERE c.id = ?
+            GROUP BY c.id
+        """, (course_id,))
+        updated = c.fetchone()
+        return dict(updated)
 
 @app.delete("/courses/{course_id}")
 def delete_course(course_id: int):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("UPDATE transcriptions SET course_id = NULL WHERE course_id = ?", (course_id,))
-    c.execute("DELETE FROM courses WHERE id = ?", (course_id,))
-    conn.commit()
-    conn.close()
-    return {"message": "Corso eliminato con successo"}
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("UPDATE transcriptions SET course_id = NULL WHERE course_id = ?", (course_id,))
+        c.execute("DELETE FROM courses WHERE id = ?", (course_id,))
+        conn.commit()
+        return {"message": "Corso eliminato con successo"}
 
 @app.get("/history")
 def get_history(course_id: Optional[int] = None):
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    query = """
-        SELECT t.id, t.filename, t.file_path, t.status, t.created_at, t.transcript, t.audio_preserved,
-               t.course_id,
-               COALESCE(c.name, t.course_name) as course_name,
-               COALESCE(c.professor_name, t.professor_name) as professor_name,
-               c.color as course_color
-        FROM transcriptions t
-        LEFT JOIN courses c ON t.course_id = c.id
-        WHERE t.status = 'success'
-    """
-    params = []
-    if course_id is not None and course_id > 0:
-        query += " AND t.course_id = ?"
-        params.append(course_id)
-    query += " ORDER BY t.id DESC"
-    c.execute(query, tuple(params))
-    rows = c.fetchall()
-    conn.close()
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        query = """
+            SELECT t.id, t.filename, t.file_path, t.status, t.created_at, t.transcript, t.audio_preserved,
+                   t.course_id,
+                   COALESCE(c.name, t.course_name) as course_name,
+                   COALESCE(c.professor_name, t.professor_name) as professor_name,
+                   c.color as course_color
+            FROM transcriptions t
+            LEFT JOIN courses c ON t.course_id = c.id
+            WHERE t.status = 'success'
+        """
+        params = []
+        if course_id is not None and course_id > 0:
+            query += " AND t.course_id = ?"
+            params.append(course_id)
+        query += " ORDER BY t.id DESC"
+        c.execute(query, tuple(params))
+        rows = c.fetchall()
     result = []
     for row in rows:
         item = dict(row)
@@ -486,44 +412,41 @@ def search_transcriptions(q: str = ""):
     fts_q = build_fts_query(q)
     if not fts_q:
         return []
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    try:
-        c.execute("""
-            SELECT t.id, t.filename, t.file_path, t.transcript, t.status, t.audio_preserved,
-                   t.course_id,
-                   COALESCE(c.name, t.course_name) as course_name,
-                   COALESCE(c.professor_name, t.professor_name) as professor_name,
-                   c.color as course_color,
-                   t.created_at,
-                   snippet(transcriptions_fts, 1, '<mark>', '</mark>', '...', 12) as content_snippet,
-                   snippet(transcriptions_fts, 0, '<mark>', '</mark>', '...', 12) as title_snippet
-            FROM transcriptions_fts f
-            JOIN transcriptions t ON t.id = f.rowid
-            LEFT JOIN courses c ON t.course_id = c.id
-            WHERE transcriptions_fts MATCH ? AND t.status = 'success'
-            ORDER BY rank
-        """, (fts_q,))
-        rows = c.fetchall()
-    except Exception:
-        pattern = f"%{q.strip()}%"
-        c.execute("""
-            SELECT t.id, t.filename, t.file_path, t.transcript, t.status, t.audio_preserved,
-                   t.course_id,
-                   COALESCE(c.name, t.course_name) as course_name,
-                   COALESCE(c.professor_name, t.professor_name) as professor_name,
-                   c.color as course_color,
-                   t.created_at,
-                   '' as content_snippet, '' as title_snippet
-            FROM transcriptions t
-            LEFT JOIN courses c ON t.course_id = c.id
-            WHERE t.status = 'success' AND (t.filename LIKE ? OR t.transcript LIKE ?)
-            ORDER BY t.id DESC
-        """, (pattern, pattern))
-        rows = c.fetchall()
-    finally:
-        conn.close()
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        try:
+            c.execute("""
+                SELECT t.id, t.filename, t.file_path, t.transcript, t.status, t.audio_preserved,
+                       t.course_id,
+                       COALESCE(c.name, t.course_name) as course_name,
+                       COALESCE(c.professor_name, t.professor_name) as professor_name,
+                       c.color as course_color,
+                       t.created_at,
+                       snippet(transcriptions_fts, 1, '<mark>', '</mark>', '...', 12) as content_snippet,
+                       snippet(transcriptions_fts, 0, '<mark>', '</mark>', '...', 12) as title_snippet
+                FROM transcriptions_fts f
+                JOIN transcriptions t ON t.id = f.rowid
+                LEFT JOIN courses c ON t.course_id = c.id
+                WHERE transcriptions_fts MATCH ? AND t.status = 'success'
+                ORDER BY rank
+            """, (fts_q,))
+            rows = c.fetchall()
+        except Exception:
+            pattern = f"%{q.strip()}%"
+            c.execute("""
+                SELECT t.id, t.filename, t.file_path, t.transcript, t.status, t.audio_preserved,
+                       t.course_id,
+                       COALESCE(c.name, t.course_name) as course_name,
+                       COALESCE(c.professor_name, t.professor_name) as professor_name,
+                       c.color as course_color,
+                       t.created_at,
+                       '' as content_snippet, '' as title_snippet
+                FROM transcriptions t
+                LEFT JOIN courses c ON t.course_id = c.id
+                WHERE t.status = 'success' AND (t.filename LIKE ? OR t.transcript LIKE ?)
+                ORDER BY t.id DESC
+            """, (pattern, pattern))
+            rows = c.fetchall()
 
     result = []
     for row in rows:
@@ -551,8 +474,6 @@ def process_transcription_core(
     preserve_audio: bool = False,
     task_id: Optional[str] = None
 ):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
     uploaded_file = None
     client = None
     try:
@@ -662,13 +583,10 @@ def process_transcription_core(
             except Exception:
                 pass
 
-        c.execute("UPDATE transcriptions SET transcript = ?, status = 'success', created_at = CURRENT_TIMESTAMP WHERE id = ?", (transcript_html, record_id))
-        clean_text = strip_html_for_fts(transcript_html)
-        c.execute("SELECT filename FROM transcriptions WHERE id = ?", (record_id,))
-        fn_row = c.fetchone()
-        cur_fn = fn_row[0] if fn_row else ""
-        c.execute("INSERT OR REPLACE INTO transcriptions_fts(rowid, filename, content) VALUES (?, ?, ?)", (record_id, cur_fn, clean_text))
-        conn.commit()
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("UPDATE transcriptions SET transcript = ?, status = 'success', created_at = CURRENT_TIMESTAMP WHERE id = ?", (transcript_html, record_id))
+            conn.commit()
 
         if not preserve_audio and os.path.exists(file_path):
             try:
@@ -727,8 +645,10 @@ def process_transcription_core(
             except Exception:
                 pass
 
-        c.execute("DELETE FROM transcriptions WHERE id = ?", (record_id,))
-        conn.commit()
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM transcriptions WHERE id = ?", (record_id,))
+            conn.commit()
 
         if os.path.exists(file_path):
             try:
@@ -740,8 +660,6 @@ def process_transcription_core(
             update_task(task_id, "error", 0, error_msg, error=error_msg)
 
         raise Exception(error_msg)
-    finally:
-        conn.close()
 
 def transcription_worker(task_id: str, api_key: str, file_path: str, record_id: int, enable_chapters: bool, enable_timestamps: bool, preserve_audio: bool):
     try:
@@ -779,27 +697,26 @@ def transcribe(
     file_path = os.path.join(UPLOAD_DIR, safe_filename)
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
+    with get_db_connection() as conn:
+        c = conn.cursor()
 
-    course_id_val = None
-    if course_id is not None and course_id > 0:
-        course_id_val = course_id
-        c.execute("SELECT name, professor_name FROM courses WHERE id = ?", (course_id_val,))
-        c_row = c.fetchone()
-        if c_row:
-            if not course_name:
-                course_name = c_row[0]
-            if not professor_name and c_row[1]:
-                professor_name = c_row[1]
+        course_id_val = None
+        if course_id is not None and course_id > 0:
+            course_id_val = course_id
+            c.execute("SELECT name, professor_name FROM courses WHERE id = ?", (course_id_val,))
+            c_row = c.fetchone()
+            if c_row:
+                if not course_name:
+                    course_name = c_row[0]
+                if not professor_name and c_row[1]:
+                    professor_name = c_row[1]
 
-    c.execute(
-        "INSERT INTO transcriptions (filename, file_path, status, audio_preserved, course_name, professor_name, course_id) VALUES (?, ?, 'processing', ?, ?, ?, ?)",
-        (file.filename, file_path, 1 if preserve_audio else 0, course_name, professor_name, course_id_val)
-    )
-    record_id = c.lastrowid
-    conn.commit()
-    conn.close()
+        c.execute(
+            "INSERT INTO transcriptions (filename, file_path, status, audio_preserved, course_name, professor_name, course_id) VALUES (?, ?, 'processing', ?, ?, ?, ?)",
+            (file.filename, file_path, 1 if preserve_audio else 0, course_name, professor_name, course_id_val)
+        )
+        record_id = c.lastrowid
+        conn.commit()
 
     task_id = uuid.uuid4().hex
     with tasks_lock:
@@ -839,11 +756,10 @@ def get_task_status(task_id: str):
 
 @app.api_route("/audio/{record_id}", methods=["GET", "HEAD"])
 def stream_audio(record_id: int):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT file_path, audio_preserved, filename FROM transcriptions WHERE id = ?", (record_id,))
-    row = c.fetchone()
-    conn.close()
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT file_path, audio_preserved, filename FROM transcriptions WHERE id = ?", (record_id,))
+        row = c.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Trascrizione non trovata")
     file_path, audio_preserved, orig_filename = row[0], bool(row[1]), row[2]
@@ -878,65 +794,57 @@ def stream_audio(record_id: int):
 
 @app.put("/transcript/{record_id}")
 def update_transcript(record_id: int, req: UpdateTranscriptRequest):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    updates = []
-    params = []
-    if req.transcript is not None:
-        updates.append("transcript = ?")
-        params.append(normalize_transcript_html(req.transcript))
-    if req.filename is not None:
-        updates.append("filename = ?")
-        params.append(req.filename)
-    if req.course_id is not None:
-        if req.course_id > 0:
-            updates.append("course_id = ?")
-            params.append(req.course_id)
-            c.execute("SELECT name, professor_name FROM courses WHERE id = ?", (req.course_id,))
-            c_row = c.fetchone()
-            if c_row:
-                updates.append("course_name = ?")
-                params.append(c_row[0])
-                if c_row[1] and req.professor_name is None:
-                    updates.append("professor_name = ?")
-                    params.append(c_row[1])
-        else:
-            updates.append("course_id = NULL")
-            updates.append("course_name = NULL")
-            updates.append("professor_name = NULL")
-    if req.course_name is not None and (req.course_id is None or req.course_id > 0):
-        updates.append("course_name = ?")
-        params.append(req.course_name)
-    if req.professor_name is not None and (req.course_id is None or req.course_id > 0):
-        updates.append("professor_name = ?")
-        params.append(req.professor_name)
-    if updates:
-        params.append(record_id)
-        c.execute(f"UPDATE transcriptions SET {', '.join(updates)} WHERE id = ?", tuple(params))
-        c.execute("SELECT filename, transcript FROM transcriptions WHERE id = ?", (record_id,))
-        row = c.fetchone()
-        if row:
-            fn, tr = row[0], row[1]
-            c.execute("INSERT OR REPLACE INTO transcriptions_fts(rowid, filename, content) VALUES (?, ?, ?)", (record_id, fn, strip_html_for_fts(tr)))
-        conn.commit()
-    conn.close()
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        updates = []
+        params = []
+        if req.transcript is not None:
+            updates.append("transcript = ?")
+            params.append(normalize_transcript_html(req.transcript))
+        if req.filename is not None:
+            updates.append("filename = ?")
+            params.append(req.filename)
+        if req.course_id is not None:
+            if req.course_id > 0:
+                updates.append("course_id = ?")
+                params.append(req.course_id)
+                c.execute("SELECT name, professor_name FROM courses WHERE id = ?", (req.course_id,))
+                c_row = c.fetchone()
+                if c_row:
+                    updates.append("course_name = ?")
+                    params.append(c_row[0])
+                    if c_row[1] and req.professor_name is None:
+                        updates.append("professor_name = ?")
+                        params.append(c_row[1])
+            else:
+                updates.append("course_id = NULL")
+                updates.append("course_name = NULL")
+                updates.append("professor_name = NULL")
+        if req.course_name is not None and (req.course_id is None or req.course_id > 0):
+            updates.append("course_name = ?")
+            params.append(req.course_name)
+        if req.professor_name is not None and (req.course_id is None or req.course_id > 0):
+            updates.append("professor_name = ?")
+            params.append(req.professor_name)
+        if updates:
+            params.append(record_id)
+            c.execute(f"UPDATE transcriptions SET {', '.join(updates)} WHERE id = ?", tuple(params))
+            conn.commit()
     return {"message": "Success"}
 
 @app.delete("/transcript/{record_id}")
 def delete_transcript(record_id: int):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT file_path FROM transcriptions WHERE id = ?", (record_id,))
-    row = c.fetchone()
-    if row and row[0] and os.path.exists(row[0]):
-        try:
-            os.remove(row[0])
-        except:
-            pass
-    c.execute("DELETE FROM transcriptions WHERE id = ?", (record_id,))
-    c.execute("DELETE FROM transcriptions_fts WHERE rowid = ?", (record_id,))
-    conn.commit()
-    conn.close()
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT file_path FROM transcriptions WHERE id = ?", (record_id,))
+        row = c.fetchone()
+        if row and row[0] and os.path.exists(row[0]):
+            try:
+                os.remove(row[0])
+            except:
+                pass
+        c.execute("DELETE FROM transcriptions WHERE id = ?", (record_id,))
+        conn.commit()
     return {"message": "Success"}
 
 def sanitize_html_for_export(html_str: str) -> str:
